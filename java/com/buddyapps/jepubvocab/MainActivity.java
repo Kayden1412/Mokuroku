@@ -182,8 +182,8 @@ public class MainActivity extends Activity {
                 "Loading library…", true, false);
         new Thread(new Runnable() {
             @Override public void run() {
-                Library.load(MainActivity.this);
                 JMDict.load(MainActivity.this);
+                Library.load(MainActivity.this);
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
                         loading.dismiss();

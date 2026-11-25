@@ -77,6 +77,10 @@ final class JMDict {
         byForm = map;
     }
 
+    static boolean contains(String form) {
+        return byForm != null && form != null && byForm.containsKey(form);
+    }
+
     static List<Hit> lookup(String text) {
         if (byForm == null || text == null || text.isEmpty())
             return new ArrayList<Hit>();

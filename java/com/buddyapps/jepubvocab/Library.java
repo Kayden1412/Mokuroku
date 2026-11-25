@@ -550,9 +550,6 @@ public final class Library {
         return isKanji(c) || isHira(c) || isKata(c);
     }
 
-    // Particles that must not be absorbed as okurigana after a kanji run.
-    private static final String TRAILING_PARTICLES = "のはがをにでもへやかねよ";
-
     private static final Set<String> STOP = new HashSet<String>(Arrays.asList(
             "は", "が", "を", "に", "で", "と", "も", "の", "へ", "や", "か", "ね", "よ",
             "わ", "お", "ご", "この", "その", "あの", "これ", "それ", "あれ", "ここ",
@@ -561,6 +558,20 @@ public final class Library {
             "そして", "しかし", "また", "それで", "だから", "ので", "から", "まで",
             "より", "など", "という", "そう", "こう", "どう", "どんな", "まず", "もし",
             "ほか", "場合", "私", "彼女", "彼", "たち", "もの", "こと", "とき"));
+
+    // Hoshidict/Yomitan scan a lookup string from longest prefix to shortest and
+    // keep the first form the dictionary recognises. Do the same here so a run
+    // like 私の/わたしの/学生です resolves to 私/わたし/学生 instead of carrying
+    // the trailing particle or auxiliary.
+    private static String normalizeToken(String word) {
+        if (word.length() < 2 || JMDict.contains(word) || STOP.contains(word)) return word;
+        int maxCut = Math.min(4, word.length() - 1);
+        for (int cut = 1; cut <= maxCut; cut++) {
+            String prefix = word.substring(0, word.length() - cut);
+            if (JMDict.contains(prefix) || STOP.contains(prefix)) return prefix;
+        }
+        return word;
+    }
 
     private static HashMap<String, Integer> tokenize(String text, Map<String, String> snippets) {
         HashMap<String, Integer> counts = new HashMap<String, Integer>();
@@ -592,14 +603,8 @@ public final class Library {
                 i++;
             }
             if (word == null) continue;
-            // The okurigana heuristic may swallow a following particle
-            // ("私の"), so peel it off before applying the stop list.
-            if (isKanji(word.charAt(0))) {
-                while (word.length() > 1
-                        && TRAILING_PARTICLES.indexOf(word.charAt(word.length() - 1)) >= 0) {
-                    word = word.substring(0, word.length() - 1);
-                }
-            }
+            // Prefer the longest recognised prefix, as a dictionary scanner does.
+            word = normalizeToken(word);
             if (word.length() < 2 || STOP.contains(word)) continue;
             Integer old = counts.get(word);
             counts.put(word, old == null ? 1 : old + 1);
