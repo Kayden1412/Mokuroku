@@ -45,10 +45,12 @@ public class MainActivity extends Activity {
     private SharedPreferences prefs;
     private int viewMode;
     private int sortMode;
+    private boolean sortDescending;
     private TextView info;
     private EditText search;
     private Button viewButton;
     private Button sortButton;
+    private Button orderButton;
     private ListView list;
     private GridView grid;
     private FrameLayout holder;
@@ -63,12 +65,12 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences("mokuroku", MODE_PRIVATE);
         viewMode = prefs.getInt("view", Ui.MODE_LIST);
         sortMode = prefs.getInt("sort", 0);
+        sortDescending = prefs.getBoolean("desc", sortMode != 0);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(20), dp(16), dp(20), dp(8));
 
-        root.addView(Ui.label(this, "Mokuroku", 20, Ui.primary(this), true));
         info = Ui.label(this, "", 12, Ui.secondary(this), false);
         root.addView(info);
 
@@ -101,6 +103,14 @@ public class MainActivity extends Activity {
         row2.add(button("Reload", new View.OnClickListener() {
             @Override public void onClick(View v) { rebuild(); }
         }, 1f));
+        orderButton = button("Desc ↓", new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                sortDescending = !sortDescending;
+                prefs.edit().putBoolean("desc", sortDescending).apply();
+                updateButtons();
+                refresh();
+            }
+        }, 1f);
         root.addView(row2.view());
 
         holder = new FrameLayout(this);
@@ -209,6 +219,7 @@ public class MainActivity extends Activity {
     private void updateButtons() {
         viewButton.setText("View: " + VIEW_NAMES[viewMode]);
         sortButton.setText("Sort: " + SORT_NAMES[sortMode]);
+        orderButton.setText(sortDescending ? "Desc ↓" : "Asc ↑");
     }
 
     private void switchViews() {
@@ -246,7 +257,9 @@ public class MainActivity extends Activity {
                         new DialogInterface.OnClickListener() {
                             @Override public void onClick(DialogInterface d, int which) {
                                 sortMode = which;
-                                prefs.edit().putInt("sort", which).apply();
+                                sortDescending = which != 0;
+                                prefs.edit().putInt("sort", which)
+                                        .putBoolean("desc", sortDescending).apply();
                                 d.dismiss();
                                 updateButtons();
                                 refresh();
@@ -274,10 +287,13 @@ public class MainActivity extends Activity {
         final int sort = sortMode;
         Collections.sort(displayed, new Comparator<Library.BookInfo>() {
             @Override public int compare(Library.BookInfo a, Library.BookInfo b) {
-                if (sort == 1) return Long.compare(b.addedAt, a.addedAt);
-                if (sort == 2) return Long.compare(b.charCount, a.charCount);
-                if (sort == 3) return Integer.compare(b.vocab.size(), a.vocab.size());
-                return a.title.compareToIgnoreCase(b.title);
+                int result;
+                if (sort == 1) result = Long.compare(a.addedAt, b.addedAt);
+                else if (sort == 2) result = Long.compare(a.charCount, b.charCount);
+                else if (sort == 3) result = Integer.compare(
+                        a.vocab.size(), b.vocab.size());
+                else result = a.title.compareToIgnoreCase(b.title);
+                return sortDescending ? -result : result;
             }
         });
         listAdapter.notifyDataSetChanged();
