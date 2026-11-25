@@ -25,6 +25,8 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.util.List;
+
 final class Ui {
 
     static final int MODE_CARD = 0;
@@ -209,12 +211,34 @@ final class Ui {
     }
 
     static void wordDialog(final Activity a, final String word, String snippet) {
-        String message = (snippet == null || snippet.isEmpty())
-                ? "Saved from your books."
-                : snippet;
+        StringBuilder message = new StringBuilder();
+        if (snippet != null && !snippet.isEmpty()) message.append(snippet).append("\n\n");
+        List<JMDict.Hit> hits = JMDict.lookup(word);
+        if (hits.isEmpty()) {
+            if (message.length() == 0) message.append("Saved from your books.");
+        } else {
+            message.append("JMdict\n");
+            for (int i = 0; i < Math.min(3, hits.size()); i++) {
+                JMDict.Hit hit = hits.get(i);
+                JMDict.Entry e = hit.entry;
+                message.append("\n").append(e.word);
+                if (!e.reading.isEmpty() && !e.reading.equals(e.word))
+                    message.append("  [").append(e.reading).append("]");
+                message.append("\n");
+                for (int j = 0; j < Math.min(3, e.glosses.size()); j++) {
+                    message.append("  ").append(e.glosses.get(j)).append("\n");
+                }
+                if (!hit.trace.isEmpty() && !hit.matched.equals(e.word)) {
+                    message.append("  (").append(hit.matched);
+                    for (String step : hit.trace) message.append(" ← ").append(step);
+                    message.append(")\n");
+                }
+            }
+            message.append("\nDefinitions: JMdict (EDRDG)\n");
+        }
         new AlertDialog.Builder(a)
                 .setTitle(word)
-                .setMessage(message)
+                .setMessage(message.toString())
                 .setPositiveButton("Look up on Jisho", new DialogInterface.OnClickListener() {
                     @Override public void onClick(DialogInterface d, int which) {
                         try {

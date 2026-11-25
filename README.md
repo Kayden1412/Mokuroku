@@ -5,7 +5,9 @@ An Android app for Japanese EPUBs. Pick many `.epub` files, and it parses them i
 - a library with card, list or grid display, covers, search, and sorting by name,
   time added, characters or words,
 - a page-by-page reader,
-- a vocabulary list extracted from the Japanese text (frequency-ranked),
+- a vocabulary list extracted from the Japanese text (frequency-ranked), with
+  offline definitions from an embedded subset of JMdict and Yomitan-style
+  deinflection so inflected forms resolve to their dictionary entry,
 - a "books with similar content" list on each book **and** on each page,
   based on shared words and character patterns.
 
@@ -36,6 +38,13 @@ The signing key is cached in the repository, so you can install over an older bu
 without uninstalling first.
 
 Toolbar icons are from [Lucide](https://lucide.dev/) (ISC License).
+
+Definitions are from [JMdict](https://www.edrdg.org/jmdict/edict_doc.html)
+(EDRDG, CC BY-SA 3.0); the embedded file contains the common-word subset.
+Deinflection rules are derived from
+[hoshidicts](https://github.com/Manhhao/hoshidicts), which follows Yomitan's
+Japanese transforms. Regenerate them with `scripts/gen_deinflector.py` from a
+shallow clone, and regenerate the dictionary with `scripts/build_jmdict.py`.
 
 ## Build locally (optional)
 
