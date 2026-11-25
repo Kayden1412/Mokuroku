@@ -550,6 +550,9 @@ public final class Library {
         return isKanji(c) || isHira(c) || isKata(c);
     }
 
+    // Particles that must not be absorbed as okurigana after a kanji run.
+    private static final String TRAILING_PARTICLES = "のはがをにでもへやかねよ";
+
     private static final Set<String> STOP = new HashSet<String>(Arrays.asList(
             "は", "が", "を", "に", "で", "と", "も", "の", "へ", "や", "か", "ね", "よ",
             "わ", "お", "ご", "この", "その", "あの", "これ", "それ", "あれ", "ここ",
@@ -564,6 +567,7 @@ public final class Library {
         int i = 0;
         int len = text.length();
         while (i < len) {
+            int start = i;
             char c = text.charAt(i);
             String word = null;
             if (isKanji(c)) {
@@ -587,12 +591,20 @@ public final class Library {
             } else {
                 i++;
             }
-            if (word == null || word.length() < 2 || STOP.contains(word)) continue;
-            if (isHira(word.charAt(0)) && word.length() < 2) continue;
+            if (word == null) continue;
+            // The okurigana heuristic may swallow a following particle
+            // ("私の"), so peel it off before applying the stop list.
+            if (isKanji(word.charAt(0))) {
+                while (word.length() > 1
+                        && TRAILING_PARTICLES.indexOf(word.charAt(word.length() - 1)) >= 0) {
+                    word = word.substring(0, word.length() - 1);
+                }
+            }
+            if (word.length() < 2 || STOP.contains(word)) continue;
             Integer old = counts.get(word);
             counts.put(word, old == null ? 1 : old + 1);
             if (!snippets.containsKey(word)) {
-                int pos = i - word.length();
+                int pos = start;
                 if (pos < 0 || !text.startsWith(word, pos)) pos = text.indexOf(word);
                 if (pos < 0) pos = 0;
                 int from = Math.max(0, pos - 18);
