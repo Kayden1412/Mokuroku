@@ -111,7 +111,7 @@ public class MainActivity extends Activity {
 
     private void pick() {
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        i.addCategory(Intent.CATEGORY_OPEN_DOCUMENT);
+        i.addCategory("android.intent.category.OPEN_DOCUMENT");
         i.setType("*/*");
         i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
         i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
