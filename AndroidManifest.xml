@@ -6,7 +6,7 @@
 
     <application
         android:label="Mokuroku"
-        android:theme="@android:style/Theme.DeviceDefault.Light"
+        android:theme="@android:style/Theme.DeviceDefault.DayNight"
         android:icon="@android:drawable/sym_def_app_icon"
         android:allowBackup="true">
 

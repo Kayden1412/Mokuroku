@@ -31,9 +31,9 @@ public class BookActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(20, 20, 20, 12);
 
-        root.addView(Ui.label(this, book.title, 20, 0xFF20202A, true));
+        root.addView(Ui.label(this, book.title, 20, Ui.primary(this), true));
         root.addView(Ui.label(this, book.fileName + "  ·  " + book.summary(),
-                12, 0xFF777788, false));
+                12, Ui.secondary(this), false));
 
         LinearLayout buttons = new LinearLayout(this);
         buttons.setOrientation(LinearLayout.HORIZONTAL);
@@ -54,10 +54,10 @@ public class BookActivity extends Activity {
         root.addView(buttons);
 
         root.addView(Ui.divider(this));
-        root.addView(Ui.label(this, "Books with similar content", 16, 0xFF20202A, true));
+        root.addView(Ui.label(this, "Books with similar content", 16, Ui.primary(this), true));
         root.addView(Ui.label(this,
                 "Based on shared words and character patterns across your library.",
-                12, 0xFF888899, false));
+                12, Ui.faint(this), false));
 
         final List<Library.SimilarInfo> similar = Library.similarToBook(book);
         ListView list = new ListView(this);
@@ -82,7 +82,7 @@ public class BookActivity extends Activity {
 
         if (similar.isEmpty()) {
             TextView note = Ui.label(this,
-                    "Add more EPUBs to see similar books here.", 14, 0xFF888899, false);
+                    "Add more EPUBs to see similar books here.", 14, Ui.faint(this), false);
             note.setPadding(16, 24, 16, 24);
             root.addView(note);
         }

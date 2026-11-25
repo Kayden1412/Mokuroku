@@ -45,23 +45,23 @@ public class PageActivity extends Activity {
         root.addView(nav);
 
         root.addView(Ui.label(this, "Page " + page.number + " of " + book.pages.size(),
-                18, 0xFF20202A, true));
-        TextView text = Ui.label(this, page.text, 16, 0xFF22222C, false);
+                18, Ui.primary(this), true));
+        TextView text = Ui.label(this, page.text, 16, Ui.primary(this), false);
         text.setTextIsSelectable(true);
         root.addView(text);
 
         root.addView(Ui.divider(this));
         root.addView(Ui.label(this, "Vocabulary on this page (" + page.vocabList.size() + ")",
-                16, 0xFF20202A, true));
+                16, Ui.primary(this), true));
         root.addView(Ui.label(this, "Tap a word to copy it or look up its meaning.",
-                12, 0xFF888899, false));
+                12, Ui.faint(this), false));
 
         int limit = Math.min(page.vocabList.size(), 60);
         for (int i = 0; i < limit; i++) {
             final Library.VocabEntry v = page.vocabList.get(i);
-            TextView row = Ui.label(this, v.word + "   ×" + v.count, 15, 0xFF334466, false);
+            TextView row = Ui.label(this, v.word + "   ×" + v.count, 15, Ui.blue(this), false);
             row.setPadding(14, 6, 14, 6);
-            row.setTextColor(Color.rgb(36, 82, 140));
+            row.setTextColor(Ui.blue(this));
             row.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View view) {
                     Ui.wordDialog(PageActivity.this, v.word, v.snippet);
@@ -71,23 +71,23 @@ public class PageActivity extends Activity {
         }
         if (page.vocabList.size() > limit) {
             root.addView(Ui.label(this, "…and " + (page.vocabList.size() - limit)
-                    + " more in the book's vocabulary list.", 12, 0xFF888899, false));
+                    + " more in the book's vocabulary list.", 12, Ui.faint(this), false));
         }
 
         root.addView(Ui.divider(this));
-        root.addView(Ui.label(this, "Books with similar content", 16, 0xFF20202A, true));
+        root.addView(Ui.label(this, "Books with similar content", 16, Ui.primary(this), true));
         List<Library.SimilarInfo> similar = Library.similarToPage(page, book);
         if (similar.isEmpty()) {
-            root.addView(Ui.label(this, "Add more EPUBs to compare.", 13, 0xFF888899, false));
+            root.addView(Ui.label(this, "Add more EPUBs to compare.", 13, Ui.faint(this), false));
         }
         for (final Library.SimilarInfo s : similar) {
             Library.BookInfo other = Library.books.get(s.bookIndex);
             String sub = s.percent() + " match";
             if (!s.sharedText().isEmpty()) sub += "  ·  " + s.sharedText();
             TextView row = Ui.label(this, other.title + "  —  " + sub,
-                    14, 0xFF334466, false);
+                    14, Ui.blue(this), false);
             row.setPadding(14, 8, 14, 8);
-            row.setTextColor(Color.rgb(24, 100, 90));
+            row.setTextColor(Ui.green(this));
             row.setOnClickListener(new View.OnClickListener() {
                 @Override public void onClick(View view) {
                     Ui.openBook(PageActivity.this, s.bookIndex);

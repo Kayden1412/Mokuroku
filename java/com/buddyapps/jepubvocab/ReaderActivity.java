@@ -25,7 +25,7 @@ public class ReaderActivity extends Activity {
         root.setPadding(16, 16, 16, 8);
         root.addView(Ui.label(this, book.pages.size() + " pages. Tap a page to read it, "
                 + "see its vocabulary and find books with similar content.",
-                13, 0xFF666678, false));
+                13, Ui.secondary(this), false));
 
         ListView list = new ListView(this);
         list.setLayoutParams(new LinearLayout.LayoutParams(
@@ -38,9 +38,9 @@ public class ReaderActivity extends Activity {
                 row.setOrientation(LinearLayout.VERTICAL);
                 row.setPadding(16, 12, 16, 12);
                 row.addView(Ui.label(ReaderActivity.this, "Page " + page.number,
-                        15, 0xFF20202A, true));
+                        15, Ui.primary(ReaderActivity.this), true));
                 row.addView(Ui.label(ReaderActivity.this, page.preview(),
-                        12, 0xFF777788, false));
+                        12, Ui.secondary(ReaderActivity.this), false));
                 return row;
             }
         });

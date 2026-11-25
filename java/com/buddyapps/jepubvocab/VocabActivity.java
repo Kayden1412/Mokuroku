@@ -61,7 +61,7 @@ public class VocabActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(16, 12, 16, 8);
         root.addView(Ui.label(this, entries.size() + " words  ·  sorted by frequency. "
-                + "Tap to copy or look up a meaning.", 13, 0xFF666678, false));
+                + "Tap to copy or look up a meaning.", 13, Ui.secondary(this), false));
 
         ListView list = new ListView(this);
         list.setLayoutParams(new LinearLayout.LayoutParams(
@@ -74,10 +74,10 @@ public class VocabActivity extends Activity {
                 row.setOrientation(LinearLayout.VERTICAL);
                 row.setPadding(16, 10, 16, 10);
                 row.addView(Ui.label(VocabActivity.this, v.word + "    ×" + v.count,
-                        16, 0xFF20202A, true));
+                        16, Ui.primary(VocabActivity.this), true));
                 if (v.snippet != null && !v.snippet.isEmpty()) {
                     row.addView(Ui.label(VocabActivity.this, v.snippet,
-                            12, 0xFF888899, false));
+                            12, Ui.faint(VocabActivity.this), false));
                 }
                 return row;
             }

@@ -40,9 +40,9 @@ public class MainActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(20, 24, 20, 16);
 
-        TextView title = Ui.label(this, "Japanese EPUB vocabulary", 20, 0xFF20202A, true);
+        TextView title = Ui.label(this, "Japanese EPUB vocabulary", 20, Ui.primary(this), true);
         root.addView(title);
-        info = Ui.label(this, "", 13, 0xFF666678, false);
+        info = Ui.label(this, "", 13, Ui.secondary(this), false);
         root.addView(info);
 
         LinearLayout buttons = new LinearLayout(this);
@@ -68,7 +68,7 @@ public class MainActivity extends Activity {
 
         TextView empty = Ui.label(this,
                 "No books yet. Tap Add EPUBs to choose Japanese .epub files.",
-                15, 0xFF777788, false);
+                15, Ui.secondary(this), false);
         empty.setPadding(24, 60, 24, 24);
         empty.setGravity(android.view.Gravity.CENTER);
         ((ViewGroup) root).addView(empty);
