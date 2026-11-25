@@ -7,6 +7,8 @@ import android.graphics.BitmapFactory;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -42,6 +44,8 @@ public final class Library {
     private static final int PAGE_CHARS = 1400;
     private static final int MAX_PAGES = 400;
     private static final int MAX_GRAMS = 180;
+    // Bump when parsing changes so old cached vocabularies are rebuilt once.
+    private static final int CACHE_VERSION = 3;
     private static final long serialVersionUID = 1L;
 
     private static File cacheFile;
@@ -54,11 +58,26 @@ public final class Library {
 
     private Library() { }
 
+    private static boolean cacheVersionOk(Context c) {
+        File marker = new File(c.getFilesDir(), "library.version");
+        if (!marker.exists()) return false;
+        try {
+            DataInputStream in = new DataInputStream(new FileInputStream(marker));
+            try {
+                return in.readInt() == CACHE_VERSION;
+            } finally {
+                in.close();
+            }
+        } catch (Throwable e) {
+            return false;
+        }
+    }
+
     public static void load(Context c) {
         cacheFile = new File(c.getFilesDir(), "library.bin");
         books.clear();
-        boolean cacheOk = false;
-        if (cacheFile.exists()) {
+        boolean cacheOk = cacheVersionOk(c);
+        if (cacheOk && cacheFile.exists()) {
             try {
                 ObjectInputStream in = new ObjectInputStream(
                         new BufferedInputStream(new FileInputStream(cacheFile)));
@@ -76,6 +95,7 @@ public final class Library {
             } catch (Throwable e) {
                 // A cache left half-written by a crash is safe to ignore.
                 books.clear();
+                cacheOk = false;
             }
         }
         // An import can crash after copying its EPUBs but before saving the cache.
@@ -202,6 +222,13 @@ public final class Library {
             if (!tmp.renameTo(cacheFile)) {
                 if (cacheFile.exists()) cacheFile.delete();
                 if (!tmp.renameTo(cacheFile)) tmp.delete();
+            }
+            File marker = new File(cacheFile.getParentFile(), "library.version");
+            DataOutputStream version = new DataOutputStream(new FileOutputStream(marker));
+            try {
+                version.writeInt(CACHE_VERSION);
+            } finally {
+                version.close();
             }
         } catch (Throwable e) {
             tmp.delete();
@@ -637,6 +664,10 @@ public final class Library {
 
     private static String htmlToText(String html) {
         String s = html.replaceAll("(?is)<(script|style|head)\\b[^>]*>.*?</\\1>", " ");
+        // Ruby annotations are readings, not part of the prose. Without this,
+        // 行<rt>い</rt>った becomes 行いった and the tokenizer extracts garbage
+        // like 行い instead of the real word.
+        s = s.replaceAll("(?is)<(rt|rp)\\b[^>]*>.*?</\\1>", "");
         s = s.replaceAll("(?i)<br\\s*/?>", "\n");
         s = s.replaceAll("(?i)</?(p|div|h[1-6]|li|tr|section|blockquote|article)\\b[^>]*>", "\n");
         s = s.replaceAll("(?s)<[^>]+>", "");
