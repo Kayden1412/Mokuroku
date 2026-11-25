@@ -76,7 +76,7 @@ public class MainActivity extends Activity {
         root.addView(info);
 
         search = new EditText(this);
-        search.setHint("Search title or file");
+        search.setHint("Search title");
         search.setTextSize(14);
         search.setSingleLine(true);
         root.addView(search);
@@ -288,14 +288,12 @@ public class MainActivity extends Activity {
         String q = normalize(query);
         if (q.isEmpty()) return true;
         String title = normalize(book.title);
-        String file = normalize(book.fileName);
-        if (title.contains(q) || file.contains(q)) return true;
+        if (title.contains(q)) return true;
         // "くま ベアー" should find a title with other words in between.
         String[] tokens = query.trim().split("\\s+");
         if (tokens.length < 2) return false;
         for (String token : tokens) {
-            String t = normalize(token);
-            if (!title.contains(t) && !file.contains(t)) return false;
+            if (!title.contains(normalize(token))) return false;
         }
         return true;
     }
