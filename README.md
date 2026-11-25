@@ -14,8 +14,8 @@ An Android app for Japanese EPUBs. Pick many `.epub` files, and it parses them i
 
 Tapping a vocabulary word copies it, looks it up offline, or opens Jisho.
 
-##Credits
-Toolbar icons are from [Lucide](https://lucide.dev/) (ISC License).
+## Credits
+Icons from [Lucide](https://lucide.dev/) (ISC License).
 
 Definitions are from [JMdict](https://www.edrdg.org/jmdict/edict_doc.html)
 (EDRDG, CC BY-SA 3.0); the embedded file contains the common-word subset.
