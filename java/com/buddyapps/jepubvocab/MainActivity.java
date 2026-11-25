@@ -18,8 +18,8 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
-import android.widget.Button;
 import android.widget.EditText;
+import android.widget.ImageButton;
 import android.widget.FrameLayout;
 import android.widget.GridView;
 import android.widget.LinearLayout;
@@ -49,9 +49,9 @@ public class MainActivity extends Activity {
     private boolean sortDescending;
     private TextView info;
     private EditText search;
-    private Button viewButton;
-    private Button sortButton;
-    private Button orderButton;
+    private ImageButton viewButton;
+    private ImageButton sortButton;
+    private ImageButton orderButton;
     private ListView list;
     private GridView grid;
     private FrameLayout holder;
@@ -81,39 +81,38 @@ public class MainActivity extends Activity {
         search.setSingleLine(true);
         root.addView(search);
 
-        LinearRow row1 = new LinearRow();
-        row1.add(button("Add EPUBs", new View.OnClickListener() {
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.addView(iconButton(R.drawable.ic_add, "Add EPUBs", new View.OnClickListener() {
             @Override public void onClick(View v) { pick(); }
-        }, 1.2f));
-        viewButton = button("View", new View.OnClickListener() {
+        }));
+        viewButton = iconButton(R.drawable.ic_view_list, "View", new View.OnClickListener() {
             @Override public void onClick(View v) { chooseView(); }
-        }, 1f);
-        row1.add(viewButton);
-        sortButton = button("Sort", new View.OnClickListener() {
+        });
+        bar.addView(viewButton);
+        sortButton = iconButton(R.drawable.ic_sort, "Sort", new View.OnClickListener() {
             @Override public void onClick(View v) { chooseSort(); }
-        }, 1f);
-        row1.add(sortButton);
-        root.addView(row1.view());
-
-        LinearRow row2 = new LinearRow();
-        row2.add(button("Vocab", new View.OnClickListener() {
+        });
+        bar.addView(sortButton);
+        bar.addView(iconButton(R.drawable.ic_vocab, "Vocabulary", new View.OnClickListener() {
             @Override public void onClick(View v) {
                 startActivity(new Intent(MainActivity.this, VocabActivity.class));
             }
-        }, 1f));
-        row2.add(button("Reload", new View.OnClickListener() {
+        }));
+        bar.addView(iconButton(R.drawable.ic_reload, "Reload", new View.OnClickListener() {
             @Override public void onClick(View v) { rebuild(); }
-        }, 1f));
-        orderButton = button("Desc ↓", new View.OnClickListener() {
+        }));
+        orderButton = iconButton(R.drawable.ic_down, "Sort descending",
+                new View.OnClickListener() {
             @Override public void onClick(View v) {
                 sortDescending = !sortDescending;
                 prefs.edit().putBoolean("desc", sortDescending).apply();
                 updateButtons();
                 refresh();
             }
-        }, 1f);
-        row2.add(orderButton);
-        root.addView(row2.view());
+        });
+        bar.addView(orderButton);
+        root.addView(bar);
 
         holder = new FrameLayout(this);
         holder.setLayoutParams(new LinearLayout.LayoutParams(
@@ -196,32 +195,29 @@ public class MainActivity extends Activity {
 
     private int dp(int value) { return Ui.dp(this, value); }
 
-    private final class LinearRow {
-        private final LinearLayout layout = new LinearLayout(MainActivity.this);
-
-        LinearRow() { layout.setOrientation(LinearLayout.HORIZONTAL); }
-
-        void add(View v) { layout.addView(v); }
-
-        LinearLayout view() { return layout; }
-    }
-
-    private Button button(String text, View.OnClickListener listener, float weight) {
-        Button b = new Button(this);
-        b.setText(text);
-        b.setTextSize(12);
-        b.setOnClickListener(listener);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                0, LinearLayout.LayoutParams.WRAP_CONTENT, weight);
-        lp.setMargins(dp(2), dp(8), dp(2), dp(8));
+    private ImageButton iconButton(int icon, String description,
+                                   View.OnClickListener listener) {
+        ImageButton b = Ui.iconButton(this, icon, description, listener);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(44), 1f);
+        lp.setMargins(dp(1), dp(4), dp(1), dp(4));
         b.setLayoutParams(lp);
         return b;
     }
 
+    private void describe(ImageButton b, String description) {
+        b.setContentDescription(description);
+        b.setTooltipText(description);
+    }
+
     private void updateButtons() {
-        viewButton.setText("View: " + VIEW_NAMES[viewMode]);
-        sortButton.setText("Sort: " + SORT_NAMES[sortMode]);
-        orderButton.setText(sortDescending ? "Desc ↓" : "Asc ↑");
+        int viewIcon = viewMode == Ui.MODE_GRID ? R.drawable.ic_view_grid
+                : viewMode == Ui.MODE_LIST ? R.drawable.ic_view_list
+                : R.drawable.ic_view_card;
+        viewButton.setImageResource(viewIcon);
+        describe(viewButton, "View: " + VIEW_NAMES[viewMode]);
+        describe(sortButton, "Sort: " + SORT_NAMES[sortMode]);
+        orderButton.setImageResource(sortDescending ? R.drawable.ic_down : R.drawable.ic_up);
+        describe(orderButton, sortDescending ? "Sort descending" : "Sort ascending");
     }
 
     private void switchViews() {

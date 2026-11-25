@@ -5,7 +5,7 @@ import android.content.Intent;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.view.View;
-import android.widget.Button;
+import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -36,10 +36,10 @@ public class PageActivity extends Activity {
 
         LinearLayout nav = new LinearLayout(this);
         nav.setOrientation(LinearLayout.HORIZONTAL);
-        nav.addView(navButton("← Previous", new View.OnClickListener() {
+        nav.addView(navButton(R.drawable.ic_prev, "Previous page", new View.OnClickListener() {
             @Override public void onClick(View v) { gotoPage(pageIndex - 1); }
         }));
-        nav.addView(navButton("Next →", new View.OnClickListener() {
+        nav.addView(navButton(R.drawable.ic_next, "Next page", new View.OnClickListener() {
             @Override public void onClick(View v) { gotoPage(pageIndex + 1); }
         }));
         root.addView(nav);
@@ -97,13 +97,10 @@ public class PageActivity extends Activity {
         }
     }
 
-    private Button navButton(String text, View.OnClickListener listener) {
-        Button b = new Button(this);
-        b.setText(text);
-        b.setTextSize(12);
-        b.setOnClickListener(listener);
+    private ImageButton navButton(int icon, String description, View.OnClickListener listener) {
+        ImageButton b = Ui.iconButton(this, icon, description, listener);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+                0, Ui.dp(this, 44), 1f);
         b.setLayoutParams(lp);
         return b;
     }

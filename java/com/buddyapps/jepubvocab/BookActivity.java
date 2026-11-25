@@ -8,7 +8,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
-import android.widget.Button;
+import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.TextView;
@@ -47,10 +47,10 @@ public class BookActivity extends Activity {
 
         LinearLayout buttons = new LinearLayout(this);
         buttons.setOrientation(LinearLayout.HORIZONTAL);
-        buttons.addView(action("Read pages", new View.OnClickListener() {
+        buttons.addView(action(R.drawable.ic_vocab, "Read pages", new View.OnClickListener() {
             @Override public void onClick(View v) { Ui.openReader(BookActivity.this, bookIndex); }
         }));
-        buttons.addView(action("Vocabulary", new View.OnClickListener() {
+        buttons.addView(action(R.drawable.ic_notes, "Vocabulary", new View.OnClickListener() {
             @Override public void onClick(View v) {
                 android.content.Intent i = new android.content.Intent(
                         BookActivity.this, VocabActivity.class);
@@ -58,7 +58,7 @@ public class BookActivity extends Activity {
                 startActivity(i);
             }
         }));
-        buttons.addView(action("Delete", new View.OnClickListener() {
+        buttons.addView(action(R.drawable.ic_delete, "Delete book", new View.OnClickListener() {
             @Override public void onClick(View v) { confirmDelete(); }
         }));
         root.addView(buttons);
@@ -99,14 +99,11 @@ public class BookActivity extends Activity {
         setContentView(root);
     }
 
-    private Button action(String text, View.OnClickListener listener) {
-        Button b = new Button(this);
-        b.setText(text);
-        b.setTextSize(12);
-        b.setOnClickListener(listener);
+    private ImageButton action(int icon, String description, View.OnClickListener listener) {
+        ImageButton b = Ui.iconButton(this, icon, description, listener);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        lp.setMargins(2, 12, 2, 12);
+                0, Ui.dp(this, 44), 1f);
+        lp.setMargins(Ui.dp(this, 2), Ui.dp(this, 10), Ui.dp(this, 2), Ui.dp(this, 10));
         b.setLayoutParams(lp);
         return b;
     }

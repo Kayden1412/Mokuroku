@@ -7,8 +7,10 @@ import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.content.res.TypedArray;
+import android.content.res.TypedValue;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
@@ -17,6 +19,7 @@ import android.net.Uri;
 import android.util.LruCache;
 import android.view.Gravity;
 import android.view.View;
+import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -65,6 +68,22 @@ final class Ui {
 
     static int dp(Context c, int value) {
         return Math.round(value * c.getResources().getDisplayMetrics().density);
+    }
+
+    /** A compact Lucide icon button, tinted for the current theme. */
+    static ImageButton iconButton(Context c, int icon, String description,
+                                  View.OnClickListener listener) {
+        ImageButton b = new ImageButton(c);
+        b.setImageResource(icon);
+        b.setImageTintList(ColorStateList.valueOf(primary(c)));
+        b.setScaleType(ImageButton.ScaleType.CENTER_INSIDE);
+        b.setContentDescription(description);
+        b.setTooltipText(description);
+        TypedValue tv = new TypedValue();
+        if (c.getTheme().resolveAttribute(android.R.attr.selectableItemBackgroundBorderless,
+                tv, true)) b.setBackgroundResource(tv.resourceId);
+        b.setOnClickListener(listener);
+        return b;
     }
 
     static Bitmap cover(Library.BookInfo book) {

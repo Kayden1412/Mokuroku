@@ -32,8 +32,10 @@ Nothing is downloaded until you run the workflow.
 4. Unzip it, open `app.apk` on your phone and tap Install (you may need to allow
    "Install unknown apps" for your browser/files app).
 
-Each workflow run creates a fresh signing key, so uninstall an older build before
-installing a newer one.
+The signing key is cached in the repository, so you can install over an older build
+without uninstalling first.
+
+Toolbar icons are from [Lucide](https://lucide.dev/) (ISC License).
 
 ## Build locally (optional)
 
