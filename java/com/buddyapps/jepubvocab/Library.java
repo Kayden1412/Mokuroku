@@ -791,7 +791,7 @@ public final class Library {
         }
 
         public int percentValue() {
-            return Math.round(score * 100);
+            return (int) Math.round(score * 100);
         }
 
         public String percent() {
