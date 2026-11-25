@@ -33,8 +33,18 @@ jobs:
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
           sdkmanager --install "platforms;android-36" "build-tools;36.0.0"
 
+      # Reuse the same signing key on every run so installing an update does not
+      # require uninstalling the previous version first.
+      - name: Cache signing key
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/mokuroku-signing
+          key: mokuroku-signing-v1
+
       - name: Build APK
         shell: bash
+        env:
+          KEYDIR: ${{ runner.temp }}/mokuroku-signing
         run: |
           SDK_ROOT="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
           export SDK_JAR="$SDK_ROOT/platforms/android-36/android.jar"
