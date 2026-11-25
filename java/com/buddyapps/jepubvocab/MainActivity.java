@@ -129,7 +129,6 @@ public class MainActivity extends Activity {
 
         setContentView(root);
 
-        Library.load(this);
         listAdapter = new ArrayAdapter<Library.BookInfo>(this,
                 android.R.layout.simple_list_item_1, displayed) {
             @Override public View getView(int position, View convertView, ViewGroup parent) {
@@ -163,7 +162,23 @@ public class MainActivity extends Activity {
 
         updateButtons();
         switchViews();
-        refresh();
+        info.setText("Loading library…");
+
+        // Parsing many EPUBs can take seconds. Do it off the main thread so the
+        // app never appears frozen on its launch screen.
+        final ProgressDialog loading = ProgressDialog.show(this, "Mokuroku",
+                "Loading library…", true, false);
+        new Thread(new Runnable() {
+            @Override public void run() {
+                Library.load(MainActivity.this);
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        loading.dismiss();
+                        refresh();
+                    }
+                });
+            }
+        }).start();
     }
 
     private int dp(int value) { return Ui.dp(this, value); }
