@@ -81,7 +81,8 @@ public final class Library {
         // An import can crash after copying its EPUBs but before saving the cache.
         // Parse only the missing files instead of the entire library on next launch.
         SyncResult sync = syncWithDisk(c);
-        if (!cacheOk || sync.changed) {
+        boolean authorsChanged = ensureAuthors(c);
+        if (!cacheOk || sync.changed || authorsChanged) {
             prepare();
             save();
         } else {
@@ -93,7 +94,8 @@ public final class Library {
     public static int importNew(Context c) {
         if (cacheFile == null) cacheFile = new File(c.getFilesDir(), "library.bin");
         SyncResult sync = syncWithDisk(c);
-        if (sync.changed) {
+        boolean authorsChanged = ensureAuthors(c);
+        if (sync.changed || authorsChanged) {
             prepare();
             save();
         }
@@ -302,7 +304,9 @@ public final class Library {
             out.add(new SimilarInfo(other.index, score, null));
         }
         Collections.sort(out);
-        if (out.size() > 6) out = new ArrayList<SimilarInfo>(out.subList(0, 6));
+        // Keep a few extra candidates so a UI filter (e.g. same author) can
+        // still fill the shortlist. BookActivity shows the first six after filtering.
+        if (out.size() > 12) out = new ArrayList<SimilarInfo>(out.subList(0, 12));
         // Sorting the source vocabulary is expensive: only do it for the books
         // that actually made the shortlist, not for every title in the library.
         for (SimilarInfo s : out) {
@@ -352,24 +356,72 @@ public final class Library {
 
     // ------------------------------------------------------------------ EPUB
 
+    private static String findOpfPath(ZipFile zip) throws IOException {
+        byte[] container = readEntry(zip, "META-INF/container.xml");
+        String opfPath = null;
+        if (container != null) {
+            Matcher m = Pattern.compile("full-path\\s*=\\s*\"([^\"]+)\"").matcher(
+                    new String(container, "UTF-8"));
+            if (m.find()) opfPath = decodeRef(m.group(1));
+        }
+        if (opfPath == null) {
+            Enumeration<? extends ZipEntry> en = zip.entries();
+            while (en.hasMoreElements()) {
+                String name = en.nextElement().getName();
+                if (name.toLowerCase().endsWith(".opf")) { opfPath = name; break; }
+            }
+        }
+        return opfPath;
+    }
+
+    private static String firstCreator(String opf) {
+        Matcher m = Pattern.compile("<dc:creator\\b[^>]*>(.*?)</dc:creator>",
+                Pattern.DOTALL | Pattern.CASE_INSENSITIVE).matcher(opf);
+        if (!m.find()) return "";
+        String author = htmlToText(m.group(1)).trim();
+        // EPUBs sometimes list "Family, Given" or a role suffix.
+        int comma = author.indexOf(',');
+        if (comma > 0 && comma < author.length() - 1) {
+            author = author.substring(comma + 1).trim() + " "
+                    + author.substring(0, comma).trim();
+        }
+        return author.replaceAll("\\s+", " ").trim();
+    }
+
+    /** Fills in authors for books cached before author metadata was supported. */
+    private static boolean ensureAuthors(Context c) {
+        File dir = new File(c.getFilesDir(), "books");
+        boolean changed = false;
+        for (BookInfo b : books) {
+            if (b.author != null && !b.author.trim().isEmpty()) continue;
+            File file = new File(dir, b.fileName);
+            try {
+                ZipFile zip = new ZipFile(file);
+                try {
+                    String opfPath = findOpfPath(zip);
+                    byte[] data = opfPath == null ? null : readEntry(zip, opfPath);
+                    if (data != null) {
+                        String author = firstCreator(new String(data, "UTF-8"));
+                        if (!author.isEmpty()) {
+                            b.author = author;
+                            changed = true;
+                        }
+                    }
+                } finally {
+                    zip.close();
+                }
+            } catch (Throwable e) {
+                // Missing/unreadable metadata is fine; the book still works.
+            }
+        }
+        return changed;
+    }
+
     private static BookInfo parseEpub(File file) {
         try {
             ZipFile zip = new ZipFile(file);
             try {
-                byte[] container = readEntry(zip, "META-INF/container.xml");
-                String opfPath = null;
-                if (container != null) {
-                    Matcher m = Pattern.compile("full-path\\s*=\\s*\"([^\"]+)\"").matcher(
-                            new String(container, "UTF-8"));
-                    if (m.find()) opfPath = decodeRef(m.group(1));
-                }
-                if (opfPath == null) {
-                    Enumeration<? extends ZipEntry> en = zip.entries();
-                    while (en.hasMoreElements()) {
-                        String name = en.nextElement().getName();
-                        if (name.toLowerCase().endsWith(".opf")) { opfPath = name; break; }
-                    }
-                }
+                String opfPath = findOpfPath(zip);
                 if (opfPath == null) return null;
 
                 byte[] opfBytes = readEntry(zip, opfPath);
@@ -430,6 +482,7 @@ public final class Library {
 
                 BookInfo book = new BookInfo();
                 book.title = title;
+                book.author = firstCreator(opf);
                 book.fileName = file.getName();
                 book.addedAt = file.lastModified();
                 book.charCount = countChars(all.toString());
@@ -872,6 +925,7 @@ public final class Library {
     public static class BookInfo implements Serializable {
         private static final long serialVersionUID = 2L;
         public String title = "";
+        public String author = "";
         public String fileName = "";
         public int index;
         public long addedAt;

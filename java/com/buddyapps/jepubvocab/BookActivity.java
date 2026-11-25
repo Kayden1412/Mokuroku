@@ -23,6 +23,8 @@ public class BookActivity extends Activity {
 
     private int bookIndex;
     private int minMatch;
+    private boolean excludeSameAuthor;
+    private ImageButton authorButton;
     private List<Library.SimilarInfo> allSimilar = new ArrayList<Library.SimilarInfo>();
     private boolean computingSimilar = true;
     private final ArrayList<Library.SimilarInfo> displayed = new ArrayList<Library.SimilarInfo>();
@@ -36,6 +38,8 @@ public class BookActivity extends Activity {
         if (!valid()) { finish(); return; }
         minMatch = getSharedPreferences("mokuroku", MODE_PRIVATE)
                 .getInt("min_match", 0);
+        excludeSameAuthor = getSharedPreferences("mokuroku", MODE_PRIVATE)
+                .getBoolean("exclude_same_author", false);
         final Library.BookInfo book = Library.books.get(bookIndex);
         setTitle(book.title);
 
@@ -51,8 +55,12 @@ public class BookActivity extends Activity {
         TextView title = Ui.label(this, book.title, 18, Ui.primary(this), true);
         title.setMaxLines(3);
         heading.addView(title);
-        heading.addView(Ui.label(this, book.fileName + "  ·  " + book.summary(),
-                11, Ui.secondary(this), false));
+        String subtitle = book.fileName;
+        if (book.author != null && !book.author.trim().isEmpty()) {
+            subtitle += "  ·  " + book.author.trim();
+        }
+        subtitle += "  ·  " + book.summary();
+        heading.addView(Ui.label(this, subtitle, 11, Ui.secondary(this), false));
         header.addView(heading, new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         root.addView(header);
@@ -73,6 +81,18 @@ public class BookActivity extends Activity {
         buttons.addView(action(R.drawable.ic_delete, "Delete book", new View.OnClickListener() {
             @Override public void onClick(View v) { confirmDelete(); }
         }));
+        authorButton = action(R.drawable.ic_author, "Exclude same author",
+                new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                excludeSameAuthor = !excludeSameAuthor;
+                getSharedPreferences("mokuroku", MODE_PRIVATE).edit()
+                        .putBoolean("exclude_same_author", excludeSameAuthor).apply();
+                updateAuthorButton();
+                applyFilter();
+            }
+        });
+        buttons.addView(authorButton);
+        updateAuthorButton();
         root.addView(buttons);
 
         root.addView(Ui.divider(this));
@@ -171,20 +191,43 @@ public class BookActivity extends Activity {
     private void applyFilter() {
         filterLabel.setText("Minimum match: " + minMatch + "%");
         displayed.clear();
+        Library.BookInfo source = Library.books.get(bookIndex);
         for (Library.SimilarInfo s : allSimilar) {
-            if (s.percentValue() >= minMatch) displayed.add(s);
+            if (s.percentValue() < minMatch) continue;
+            if (excludeSameAuthor
+                    && sameAuthor(source, Library.books.get(s.bookIndex))) continue;
+            displayed.add(s);
+            if (displayed.size() >= 6) break;
         }
         if (similarAdapter != null) similarAdapter.notifyDataSetChanged();
         if (emptyNote != null) {
             emptyNote.setVisibility(displayed.isEmpty() ? View.VISIBLE : View.GONE);
             if (computingSimilar) {
                 emptyNote.setText("Finding similar books…");
+            } else if (allSimilar.isEmpty()) {
+                emptyNote.setText("Add more EPUBs to see similar books here.");
             } else {
-                emptyNote.setText(allSimilar.isEmpty()
-                        ? "Add more EPUBs to see similar books here."
-                        : "No books match at least " + minMatch + "%.");
+                String note = "No books match at least " + minMatch + "%.";
+                if (excludeSameAuthor) note += " Same-author books are excluded.";
+                emptyNote.setText(note);
             }
         }
+    }
+
+    private void updateAuthorButton() {
+        int color = excludeSameAuthor ? Ui.blue(this) : Ui.secondary(this);
+        authorButton.setImageTintList(ColorStateList.valueOf(color));
+        String description = (excludeSameAuthor ? "Include" : "Exclude")
+                + " books by the same author";
+        authorButton.setContentDescription(description);
+        authorButton.setTooltipText(description);
+    }
+
+    private static boolean sameAuthor(Library.BookInfo a, Library.BookInfo b) {
+        if (a.author == null || b.author == null) return false;
+        String x = a.author.trim().toLowerCase(java.util.Locale.ROOT);
+        String y = b.author.trim().toLowerCase(java.util.Locale.ROOT);
+        return !x.isEmpty() && x.equals(y);
     }
 
     private ImageButton action(int icon, String description, View.OnClickListener listener) {
