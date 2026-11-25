@@ -31,9 +31,19 @@ public class BookActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(20, 20, 20, 12);
 
-        root.addView(Ui.label(this, book.title, 20, Ui.primary(this), true));
-        root.addView(Ui.label(this, book.fileName + "  ·  " + book.summary(),
-                12, Ui.secondary(this), false));
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.addView(Ui.coverView(this, book, 72, 100));
+        LinearLayout heading = new LinearLayout(this);
+        heading.setOrientation(LinearLayout.VERTICAL);
+        TextView title = Ui.label(this, book.title, 18, Ui.primary(this), true);
+        title.setMaxLines(3);
+        heading.addView(title);
+        heading.addView(Ui.label(this, book.fileName + "  ·  " + book.summary(),
+                11, Ui.secondary(this), false));
+        header.addView(heading, new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        root.addView(header);
 
         LinearLayout buttons = new LinearLayout(this);
         buttons.setOrientation(LinearLayout.HORIZONTAL);

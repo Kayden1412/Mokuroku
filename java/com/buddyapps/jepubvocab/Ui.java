@@ -9,16 +9,27 @@ import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.res.Configuration;
 import android.content.res.TypedArray;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.Uri;
+import android.util.LruCache;
 import android.view.Gravity;
 import android.view.View;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
 final class Ui {
+
+    static final int MODE_CARD = 0;
+    static final int MODE_LIST = 1;
+    static final int MODE_GRID = 2;
+
+    private static final LruCache<Integer, Bitmap> COVERS =
+            new LruCache<Integer, Bitmap>(24);
 
     private Ui() { }
 
@@ -52,6 +63,24 @@ final class Ui {
         return dark(c) ? Color.rgb(80, 82, 92) : Color.rgb(220, 222, 228);
     }
 
+    static int dp(Context c, int value) {
+        return Math.round(value * c.getResources().getDisplayMetrics().density);
+    }
+
+    static Bitmap cover(Library.BookInfo book) {
+        if (book.cover == null || book.cover.length == 0) return null;
+        Bitmap bm = COVERS.get(book.index);
+        if (bm == null) {
+            try {
+                bm = BitmapFactory.decodeByteArray(book.cover, 0, book.cover.length);
+                if (bm != null) COVERS.put(book.index, bm);
+            } catch (Exception e) {
+                return null;
+            }
+        }
+        return bm;
+    }
+
     static TextView label(Context c, String text, int sp, int color, boolean bold) {
         TextView tv = new TextView(c);
         tv.setText(text);
@@ -63,22 +92,81 @@ final class Ui {
         return tv;
     }
 
-    static LinearLayout bookRow(Context c, Library.BookInfo book, String subtitle) {
-        LinearLayout row = new LinearLayout(c);
-        row.setOrientation(LinearLayout.VERTICAL);
-        row.setPadding(16, 12, 16, 12);
+    static ImageView coverView(Context c, Library.BookInfo book, int wDp, int hDp) {
+        ImageView iv = new ImageView(c);
+        LinearLayout.LayoutParams lp =
+                new LinearLayout.LayoutParams(dp(c, wDp), dp(c, hDp));
+        lp.rightMargin = dp(c, 10);
+        iv.setLayoutParams(lp);
+        iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        iv.setAdjustViewBounds(false);
+        Bitmap bm = cover(book);
+        if (bm != null) iv.setImageBitmap(bm);
+        else iv.setImageResource(android.R.drawable.ic_menu_gallery);
+        return iv;
+    }
+
+    private static void selectable(Context c, View v) {
         TypedArray ta = c.getTheme().obtainStyledAttributes(
                 new int[]{android.R.attr.selectableItemBackground});
         int background = 0;
         try { background = ta.getResourceId(0, 0); }
         catch (Exception ignored) { }
         finally { ta.recycle(); }
-        if (background != 0) row.setBackgroundResource(background);
-        else row.setBackgroundResource(android.R.drawable.list_selector_background);
-        row.addView(label(c, book.title, 16, primary(c), true));
+        if (background != 0) v.setBackgroundResource(background);
+        else v.setBackgroundResource(android.R.drawable.list_selector_background);
+    }
+
+    /** Builds one library item for card, list or grid display. */
+    static View bookView(Context c, Library.BookInfo book, String subtitle, int mode) {
         String sub = book.summary();
         if (subtitle != null && !subtitle.isEmpty()) sub = subtitle + "  ·  " + sub;
-        row.addView(label(c, sub, 12, secondary(c), false));
+
+        if (mode == MODE_GRID) {
+            LinearLayout box = new LinearLayout(c);
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setPadding(dp(c, 8), dp(c, 8), dp(c, 8), dp(c, 12));
+            selectable(c, box);
+            ImageView iv = coverView(c, book, 140, 190);
+            LinearLayout.LayoutParams ilp =
+                    new LinearLayout.LayoutParams(dp(c, 140), dp(c, 190));
+            ilp.gravity = Gravity.CENTER_HORIZONTAL;
+            iv.setLayoutParams(ilp);
+            box.addView(iv);
+            TextView title = label(c, book.title, 13, primary(c), true);
+            title.setMaxLines(2);
+            box.addView(title);
+            TextView stats = label(c, sub, 10, secondary(c), false);
+            stats.setMaxLines(2);
+            box.addView(stats);
+            return box;
+        }
+
+        int imageW = mode == MODE_CARD ? 84 : 52;
+        int imageH = mode == MODE_CARD ? 116 : 72;
+        LinearLayout row = new LinearLayout(c);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setPadding(dp(c, mode == MODE_CARD ? 14 : 10), dp(c, 10),
+                dp(c, 10), dp(c, 10));
+        selectable(c, row);
+        row.addView(coverView(c, book, imageW, imageH));
+        LinearLayout texts = new LinearLayout(c);
+        texts.setOrientation(LinearLayout.VERTICAL);
+        TextView title = label(c, book.title, mode == MODE_CARD ? 16 : 15,
+                primary(c), true);
+        title.setMaxLines(2);
+        texts.addView(title);
+        TextView stats = label(c, sub, 11, secondary(c), false);
+        stats.setMaxLines(3);
+        texts.addView(stats);
+        row.addView(texts, new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        return row;
+    }
+
+    static LinearLayout bookRow(Context c, Library.BookInfo book, String subtitle) {
+        // Used by the "similar books" lists.
+        LinearLayout row = (LinearLayout) bookView(c, book, subtitle, MODE_LIST);
         return row;
     }
 

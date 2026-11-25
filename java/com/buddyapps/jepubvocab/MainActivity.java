@@ -1,19 +1,27 @@
 package com.buddyapps.jepubvocab;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.ProgressDialog;
 import android.content.ContentResolver;
+import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Bundle;
 import android.provider.OpenableColumns;
+import android.text.Editable;
+import android.text.TextWatcher;
+import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
-import android.widget.BaseAdapter;
 import android.widget.Button;
+import android.widget.EditText;
+import android.widget.FrameLayout;
+import android.widget.GridView;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.TextView;
@@ -23,90 +31,238 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 
 public class MainActivity extends Activity {
 
     private static final int PICK_EPUBS = 42;
-    private ArrayAdapter<Library.BookInfo> adapter;
+    private static final String[] VIEW_NAMES = {"Card", "List", "Grid"};
+    private static final String[] SORT_NAMES = {"Name", "Time added", "Characters", "Words"};
+
+    private SharedPreferences prefs;
+    private int viewMode;
+    private int sortMode;
     private TextView info;
+    private EditText search;
+    private Button viewButton;
+    private Button sortButton;
     private ListView list;
+    private GridView grid;
+    private ArrayAdapter<Library.BookInfo> listAdapter;
+    private ArrayAdapter<Library.BookInfo> gridAdapter;
+    private final ArrayList<Library.BookInfo> displayed = new ArrayList<Library.BookInfo>();
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setTitle("Mokuroku");
+        prefs = getSharedPreferences("mokuroku", MODE_PRIVATE);
+        viewMode = prefs.getInt("view", Ui.MODE_LIST);
+        sortMode = prefs.getInt("sort", 0);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(20, 24, 20, 16);
+        root.setPadding(dp(20), dp(16), dp(20), dp(8));
 
-        TextView title = Ui.label(this, "Japanese EPUB vocabulary", 20, Ui.primary(this), true);
-        root.addView(title);
-        info = Ui.label(this, "", 13, Ui.secondary(this), false);
+        root.addView(Ui.label(this, "Mokuroku", 20, Ui.primary(this), true));
+        info = Ui.label(this, "", 12, Ui.secondary(this), false);
         root.addView(info);
 
-        LinearLayout buttons = new LinearLayout(this);
-        buttons.setOrientation(LinearLayout.HORIZONTAL);
-        buttons.addView(button("Add EPUBs", new View.OnClickListener() {
+        search = new EditText(this);
+        search.setHint("Search title, file or word");
+        search.setTextSize(14);
+        search.setSingleLine(true);
+        root.addView(search);
+
+        LinearRow row1 = new LinearRow();
+        row1.add(button("Add EPUBs", new View.OnClickListener() {
             @Override public void onClick(View v) { pick(); }
-        }));
-        buttons.addView(button("Vocab", new View.OnClickListener() {
+        }, 1.2f));
+        viewButton = button("View", new View.OnClickListener() {
+            @Override public void onClick(View v) { chooseView(); }
+        }, 1f);
+        row1.add(viewButton);
+        sortButton = button("Sort", new View.OnClickListener() {
+            @Override public void onClick(View v) { chooseSort(); }
+        }, 1f);
+        row1.add(sortButton);
+        root.addView(row1.view());
+
+        LinearRow row2 = new LinearRow();
+        row2.add(button("Vocab", new View.OnClickListener() {
             @Override public void onClick(View v) {
                 startActivity(new Intent(MainActivity.this, VocabActivity.class));
             }
-        }));
-        buttons.addView(button("Reload", new View.OnClickListener() {
+        }, 1f));
+        row2.add(button("Reload", new View.OnClickListener() {
             @Override public void onClick(View v) { rebuild(); }
-        }));
-        root.addView(buttons);
+        }, 1f));
+        root.addView(row2.view());
 
-        list = new ListView(this);
-        list.setLayoutParams(new LinearLayout.LayoutParams(
+        FrameLayout holder = new FrameLayout(this);
+        holder.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        list = new ListView(this);
         list.setDividerHeight(1);
-        root.addView(list);
+        grid = new GridView(this);
+        grid.setNumColumns(2);
+        grid.setHorizontalSpacing(dp(6));
+        grid.setVerticalSpacing(dp(6));
+        grid.setPadding(dp(4), dp(4), dp(4), dp(4));
+        grid.setGravity(Gravity.CENTER);
+        holder.addView(list);
+        holder.addView(grid);
 
         TextView empty = Ui.label(this,
-                "No books yet. Tap Add EPUBs to choose Japanese .epub files.",
-                15, Ui.secondary(this), false);
-        empty.setPadding(24, 60, 24, 24);
-        empty.setGravity(android.view.Gravity.CENTER);
-        ((ViewGroup) root).addView(empty);
+                "No books match. Add EPUBs or clear your search.", 14, Ui.faint(this), false);
+        empty.setGravity(Gravity.CENTER);
+        FrameLayout.LayoutParams elp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER);
+        empty.setLayoutParams(elp);
+        holder.addView(empty);
         list.setEmptyView(empty);
+        grid.setEmptyView(empty);
+        root.addView(holder);
 
         setContentView(root);
 
         Library.load(this);
-        adapter = new ArrayAdapter<Library.BookInfo>(this,
-                android.R.layout.simple_list_item_1, Library.books) {
+        listAdapter = new ArrayAdapter<Library.BookInfo>(this,
+                android.R.layout.simple_list_item_1, displayed) {
             @Override public View getView(int position, View convertView, ViewGroup parent) {
-                return Ui.bookRow(MainActivity.this, getItem(position), null);
+                return Ui.bookView(MainActivity.this, getItem(position), null, viewMode);
             }
         };
-        list.setAdapter(adapter);
-        list.setOnItemClickListener(new AdapterView.OnItemClickListener() {
-            @Override public void onItemClick(AdapterView<?> p, View v, int pos, long id) {
-                Ui.openBook(MainActivity.this, pos);
+        gridAdapter = new ArrayAdapter<Library.BookInfo>(this,
+                android.R.layout.simple_list_item_1, displayed) {
+            @Override public View getView(int position, View convertView, ViewGroup parent) {
+                return Ui.bookView(MainActivity.this, getItem(position), null, Ui.MODE_GRID);
             }
+        };
+        list.setAdapter(listAdapter);
+        grid.setAdapter(gridAdapter);
+
+        AdapterView.OnItemClickListener click = new AdapterView.OnItemClickListener() {
+            @Override public void onItemClick(AdapterView<?> parent, View v,
+                                             int position, long id) {
+                Library.BookInfo book = (Library.BookInfo) parent.getItemAtPosition(position);
+                Ui.openBook(MainActivity.this, book.index);
+            }
+        };
+        list.setOnItemClickListener(click);
+        grid.setOnItemClickListener(click);
+
+        search.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void afterTextChanged(Editable s) { refresh(); }
         });
-        updateInfo();
+
+        updateButtons();
+        switchViews();
+        refresh();
     }
 
-    private Button button(String text, View.OnClickListener listener) {
+    private int dp(int value) { return Ui.dp(this, value); }
+
+    private final class LinearRow {
+        private final LinearLayout layout = new LinearLayout(MainActivity.this);
+
+        LinearRow() { layout.setOrientation(LinearLayout.HORIZONTAL); }
+
+        void add(View v) { layout.addView(v); }
+
+        LinearLayout view() { return layout; }
+    }
+
+    private Button button(String text, View.OnClickListener listener, float weight) {
         Button b = new Button(this);
         b.setText(text);
-        b.setTextSize(13);
+        b.setTextSize(12);
         b.setOnClickListener(listener);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,
-                LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        lp.setMargins(2, 12, 2, 12);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, weight);
+        lp.setMargins(dp(2), dp(8), dp(2), dp(8));
         b.setLayoutParams(lp);
         return b;
     }
 
-    private void updateInfo() {
+    private void updateButtons() {
+        viewButton.setText("View: " + VIEW_NAMES[viewMode]);
+        sortButton.setText("Sort: " + SORT_NAMES[sortMode]);
+    }
+
+    private void switchViews() {
+        boolean asGrid = viewMode == Ui.MODE_GRID;
+        grid.setVisibility(asGrid ? View.VISIBLE : View.GONE);
+        list.setVisibility(asGrid ? View.GONE : View.VISIBLE);
+    }
+
+    private void chooseView() {
+        new AlertDialog.Builder(this)
+                .setTitle("Display books as")
+                .setSingleChoiceItems(VIEW_NAMES, viewMode,
+                        new DialogInterface.OnClickListener() {
+                            @Override public void onClick(DialogInterface d, int which) {
+                                viewMode = which;
+                                prefs.edit().putInt("view", which).apply();
+                                d.dismiss();
+                                updateButtons();
+                                switchViews();
+                                refresh();
+                            }
+                        })
+                .show();
+    }
+
+    private void chooseSort() {
+        new AlertDialog.Builder(this)
+                .setTitle("Sort books by")
+                .setSingleChoiceItems(SORT_NAMES, sortMode,
+                        new DialogInterface.OnClickListener() {
+                            @Override public void onClick(DialogInterface d, int which) {
+                                sortMode = which;
+                                prefs.edit().putInt("sort", which).apply();
+                                d.dismiss();
+                                updateButtons();
+                                refresh();
+                            }
+                        })
+                .show();
+    }
+
+    private boolean matches(Library.BookInfo book, String query) {
+        if (book.title.toLowerCase(Locale.ROOT).contains(query)) return true;
+        if (book.fileName.toLowerCase(Locale.ROOT).contains(query)) return true;
+        for (String word : book.vocabMap.keySet()) {
+            if (word.toLowerCase(Locale.ROOT).contains(query)) return true;
+        }
+        return false;
+    }
+
+    private void refresh() {
+        String query = search.getText().toString().trim().toLowerCase(Locale.ROOT);
+        displayed.clear();
+        for (Library.BookInfo book : Library.books) {
+            if (!query.isEmpty() && !matches(book, query)) continue;
+            displayed.add(book);
+        }
+        final int sort = sortMode;
+        Collections.sort(displayed, new Comparator<Library.BookInfo>() {
+            @Override public int compare(Library.BookInfo a, Library.BookInfo b) {
+                if (sort == 1) return Long.compare(b.addedAt, a.addedAt);
+                if (sort == 2) return Long.compare(b.charCount, a.charCount);
+                if (sort == 3) return Integer.compare(b.vocab.size(), a.vocab.size());
+                return a.title.compareToIgnoreCase(b.title);
+            }
+        });
+        listAdapter.notifyDataSetChanged();
+        gridAdapter.notifyDataSetChanged();
         info.setText(Library.books.size() + " books  ·  " + Library.totalVocab()
-                + " unique words  ·  tap a book for similar content");
+                + " unique words  ·  showing " + displayed.size());
     }
 
     private void pick() {
@@ -160,8 +316,7 @@ public class MainActivity extends Activity {
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
                         progress.dismiss();
-                        adapter.notifyDataSetChanged();
-                        updateInfo();
+                        refresh();
                         Toast.makeText(MainActivity.this,
                                 "Imported " + added[0] + " new EPUB(s)", Toast.LENGTH_SHORT)
                                 .show();
@@ -180,8 +335,7 @@ public class MainActivity extends Activity {
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
                         progress.dismiss();
-                        adapter.notifyDataSetChanged();
-                        updateInfo();
+                        refresh();
                     }
                 });
             }

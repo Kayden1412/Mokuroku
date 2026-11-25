@@ -2,6 +2,8 @@
 
 An Android app for Japanese EPUBs. Pick many `.epub` files, and it parses them into:
 
+- a library with card, list or grid display, covers, search, and sorting by name,
+  time added, characters or words,
 - a page-by-page reader,
 - a vocabulary list extracted from the Japanese text (frequency-ranked),
 - a "books with similar content" list on each book **and** on each page,
@@ -55,4 +57,4 @@ The signed APK appears at `build/app.apk`.
 - Similarity uses TF-IDF cosine similarity over Japanese character bigrams; shared
   vocabulary is shown alongside the match percentage.
 - Parsed books are cached so later launches start quickly. Use **Reload** after
-  replacing files.
+  replacing files. Cover images are downscaled to 360×480 JPEGs to keep the app small.

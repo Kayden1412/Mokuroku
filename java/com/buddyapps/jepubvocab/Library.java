@@ -1,6 +1,8 @@
 package com.buddyapps.jepubvocab;
 
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 
 import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
@@ -297,6 +299,9 @@ public final class Library {
                 BookInfo book = new BookInfo();
                 book.title = title;
                 book.fileName = file.getName();
+                book.addedAt = file.lastModified();
+                book.charCount = countChars(all.toString());
+                book.cover = extractCover(zip, opf, opfDir, manifest);
                 book.pages = splitPages(all.toString());
                 for (PageInfo page : book.pages) {
                     for (Map.Entry<String, Integer> e : page.vocab.entrySet()) {
@@ -454,6 +459,77 @@ public final class Library {
         s = s.replaceAll(" *\\n *", "\n");
         s = s.replaceAll("\\n{3,}", "\n\n");
         return s.trim();
+    }
+
+    private static long countChars(String text) {
+        long n = 0;
+        for (int i = 0; i < text.length(); i++) {
+            if (!Character.isWhitespace(text.charAt(i))) n++;
+        }
+        return n;
+    }
+
+    /** Finds the EPUB cover image and downsizes it to keep the app small. */
+    private static byte[] extractCover(ZipFile zip, String opf, String opfDir,
+                                       Map<String, String> manifest) {
+        String href = null;
+        Matcher m = Pattern.compile("<meta\\b[^>]*name\\s*=\\s*[\"']cover[\"']"
+                + "[^>]*content\\s*=\\s*[\"']([^\"']+)[\"']",
+                Pattern.CASE_INSENSITIVE).matcher(opf);
+        if (m.find()) href = manifest.get(m.group(1));
+        if (href == null) {
+            Matcher im = Pattern.compile("<item\\b([^>]*)>", Pattern.CASE_INSENSITIVE)
+                    .matcher(opf);
+            while (im.find()) {
+                String attrs = im.group(1);
+                if (attr(attrs, "properties").toLowerCase().contains("cover-image")) {
+                    String candidate = attr(attrs, "href");
+                    if (!candidate.isEmpty()) { href = candidate; break; }
+                }
+            }
+        }
+        byte[] data = null;
+        if (href != null) {
+            try { data = readEntry(zip, resolve(opfDir, href)); }
+            catch (Exception e) { data = null; }
+        }
+        if (data == null) {
+            Enumeration<? extends ZipEntry> en = zip.entries();
+            while (en.hasMoreElements()) {
+                ZipEntry z = en.nextElement();
+                String name = z.getName().toLowerCase();
+                if (name.contains("cover") && (name.endsWith(".jpg")
+                        || name.endsWith(".jpeg") || name.endsWith(".png"))) {
+                    try {
+                        data = readEntry(zip, z.getName());
+                        if (data != null) break;
+                    } catch (Exception e) { data = null; }
+                }
+            }
+        }
+        if (data == null) return null;
+        return compressCover(data);
+    }
+
+    private static byte[] compressCover(byte[] data) {
+        try {
+            Bitmap bm = BitmapFactory.decodeByteArray(data, 0, data.length);
+            if (bm == null) return null;
+            int w = bm.getWidth();
+            int h = bm.getHeight();
+            float scale = Math.min(1f, Math.min(360f / w, 480f / h));
+            int nw = Math.max(1, Math.round(w * scale));
+            int nh = Math.max(1, Math.round(h * scale));
+            Bitmap small = (nw == w && nh == h)
+                    ? bm : Bitmap.createScaledBitmap(bm, nw, nh, true);
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            small.compress(Bitmap.CompressFormat.JPEG, 78, out);
+            if (small != bm) small.recycle();
+            bm.recycle();
+            return out.toByteArray();
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     // -------------------------------------------------------------- tokenize
@@ -631,10 +707,13 @@ public final class Library {
     // ----------------------------------------------------------------- model
 
     public static class BookInfo implements Serializable {
-        private static final long serialVersionUID = 1L;
+        private static final long serialVersionUID = 2L;
         public String title = "";
         public String fileName = "";
         public int index;
+        public long addedAt;
+        public long charCount;
+        public byte[] cover;
         public ArrayList<PageInfo> pages = new ArrayList<PageInfo>();
         public ArrayList<VocabEntry> vocab = new ArrayList<VocabEntry>();
         public HashMap<String, Integer> vocabMap = new HashMap<String, Integer>();
@@ -642,7 +721,8 @@ public final class Library {
         public HashMap<String, Integer> grams = new HashMap<String, Integer>();
 
         public String summary() {
-            return pages.size() + " pages  ·  " + vocab.size() + " words";
+            return pages.size() + " pages  ·  " + charCount + " chars  ·  "
+                    + vocab.size() + " words";
         }
     }
 
