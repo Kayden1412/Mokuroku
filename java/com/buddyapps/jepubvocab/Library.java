@@ -45,6 +45,9 @@ public final class Library {
 
     private static File cacheFile;
     private static HashMap<String, Integer> df = new HashMap<String, Integer>();
+    private static HashMap<String, Integer> wordDf = new HashMap<String, Integer>();
+    private static double[] bookWordNorm = new double[0];
+    private static double[] bookGramNorm = new double[0];
 
     private Library() { }
 
@@ -134,12 +137,30 @@ public final class Library {
     /** Recomputes inverse document frequencies and book indexes. */
     private static void prepare() {
         df = new HashMap<String, Integer>();
+        wordDf = new HashMap<String, Integer>();
         for (int i = 0; i < books.size(); i++) {
             BookInfo b = books.get(i);
             b.index = i;
             for (String g : b.grams.keySet()) {
                 Integer old = df.get(g);
                 df.put(g, old == null ? 1 : old + 1);
+            }
+            for (String w : b.vocabMap.keySet()) {
+                Integer old = wordDf.get(w);
+                wordDf.put(w, old == null ? 1 : old + 1);
+            }
+        }
+        bookWordNorm = new double[books.size()];
+        bookGramNorm = new double[books.size()];
+        for (int i = 0; i < books.size(); i++) {
+            BookInfo b = books.get(i);
+            for (Map.Entry<String, Integer> e : b.vocabMap.entrySet()) {
+                double w = wordWeight(e.getKey(), e.getValue());
+                bookWordNorm[i] += w * w;
+            }
+            for (Map.Entry<String, Integer> e : b.grams.entrySet()) {
+                double w = weight(e.getKey(), e.getValue());
+                bookGramNorm[i] += w * w;
             }
         }
     }
@@ -151,21 +172,14 @@ public final class Library {
         return count * idf;
     }
 
-    private static double similarity(Map<String, Integer> a, Map<String, Integer> b) {
-        if (a.isEmpty() || b.isEmpty() || books.size() < 2) return 0.0;
-        double dot = 0.0;
-        double na = 0.0;
-        for (Map.Entry<String, Integer> e : a.entrySet()) {
-            double wa = weight(e.getKey(), e.getValue());
-            na += wa * wa;
-            Integer cb = b.get(e.getKey());
-            if (cb != null) dot += wa * weight(e.getKey(), cb);
-        }
-        double nb = 0.0;
-        for (Map.Entry<String, Integer> e : b.entrySet()) {
-            double wb = weight(e.getKey(), e.getValue());
-            nb += wb * wb;
-        }
+    private static double wordWeight(String word, int count) {
+        Integer d = wordDf.get(word);
+        int docFreq = d == null ? 0 : d;
+        double idf = Math.log((books.size() + 1.0) / (docFreq + 1.0)) + 1.0;
+        return count * idf * JitenRank.weight(word);
+    }
+
+    private static double cosine(double dot, double na, double nb) {
         if (na <= 0 || nb <= 0) return 0.0;
         double value = dot / Math.sqrt(na * nb);
         if (value < 0) value = 0;
@@ -173,11 +187,41 @@ public final class Library {
         return value;
     }
 
+    /**
+     * Blend rank-weighted vocabulary overlap with character-pattern overlap.
+     * The other book's norms are cached in prepare(), so this stays fast even
+     * when a page is compared against a large library.
+     */
+    private static double matchScore(Map<String, Integer> vocabA,
+                                     Map<String, Integer> gramsA,
+                                     BookInfo other) {
+        if (books.size() < 2) return 0.0;
+        double wordDot = 0.0;
+        double wordNorm = 0.0;
+        for (Map.Entry<String, Integer> e : vocabA.entrySet()) {
+            double w = wordWeight(e.getKey(), e.getValue());
+            wordNorm += w * w;
+            Integer count = other.vocabMap.get(e.getKey());
+            if (count != null) wordDot += w * wordWeight(e.getKey(), count);
+        }
+        double gramDot = 0.0;
+        double gramNorm = 0.0;
+        for (Map.Entry<String, Integer> e : gramsA.entrySet()) {
+            double w = weight(e.getKey(), e.getValue());
+            gramNorm += w * w;
+            Integer count = other.grams.get(e.getKey());
+            if (count != null) gramDot += w * weight(e.getKey(), count);
+        }
+        int i = other.index;
+        return 0.7 * cosine(wordDot, wordNorm, bookWordNorm[i])
+                + 0.3 * cosine(gramDot, gramNorm, bookGramNorm[i]);
+    }
+
     public static List<SimilarInfo> similarToBook(BookInfo source) {
         ArrayList<SimilarInfo> out = new ArrayList<SimilarInfo>();
         for (BookInfo other : books) {
             if (other.index == source.index) continue;
-            double score = similarity(source.grams, other.grams);
+            double score = matchScore(source.vocabMap, source.grams, other);
             out.add(new SimilarInfo(other.index, score, sharedWords(source.vocabMap, other.vocabMap)));
         }
         Collections.sort(out);
@@ -189,7 +233,7 @@ public final class Library {
         ArrayList<SimilarInfo> out = new ArrayList<SimilarInfo>();
         for (BookInfo other : books) {
             if (other.index == source.index) continue;
-            double score = similarity(page.grams, other.grams);
+            double score = matchScore(page.vocab, page.grams, other);
             out.add(new SimilarInfo(other.index, score, sharedWords(page.vocab, other.vocabMap)));
         }
         Collections.sort(out);
@@ -203,12 +247,14 @@ public final class Library {
         final Map<String, Integer> aa = a;
         Collections.sort(sorted, new Comparator<String>() {
             @Override public int compare(String x, String y) {
-                int c = aa.get(y).compareTo(aa.get(x));
+                int c = Integer.compare(JitenRank.rank(y), JitenRank.rank(x));
+                if (c != 0) return c;
+                c = aa.get(y).compareTo(aa.get(x));
                 return c != 0 ? c : x.compareTo(y);
             }
         });
         for (String w : sorted) {
-            if (aa.get(w) < 2) continue;
+            if (aa.get(w) < 2 || JitenRank.rank(w) <= 100) continue;
             Integer n = b.get(w);
             if (n != null && n >= 2) {
                 common.add(w);

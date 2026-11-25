@@ -183,6 +183,7 @@ public class MainActivity extends Activity {
         new Thread(new Runnable() {
             @Override public void run() {
                 JMDict.load(MainActivity.this);
+                JitenRank.load(MainActivity.this);
                 Library.load(MainActivity.this);
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
