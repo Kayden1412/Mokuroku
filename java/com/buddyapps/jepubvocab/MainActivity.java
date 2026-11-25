@@ -270,14 +270,16 @@ public class MainActivity extends Activity {
                 .show();
     }
 
-    // Titles often contain spaces between Japanese words ("くま クマ 熊 ベアー"),
-    // so ignore whitespace and unify full/half-width characters when searching.
+    // Ignore whitespace, unify full/half-width characters, and treat hiragana and
+    // katakana as the same so "べ" finds a title written as "ベアー".
     private static String normalize(String s) {
         String n = Normalizer.normalize(s, Normalizer.Form.NFKC).toLowerCase(Locale.ROOT);
         StringBuilder out = new StringBuilder(n.length());
         for (int i = 0; i < n.length(); i++) {
             char c = n.charAt(i);
-            if (!Character.isWhitespace(c)) out.append(c);
+            if (Character.isWhitespace(c)) continue;
+            if (c >= 0x3041 && c <= 0x3096) c += 0x60; // hiragana -> katakana
+            out.append(c);
         }
         return out.toString();
     }
