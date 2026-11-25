@@ -25,7 +25,7 @@ public class PageActivity extends Activity {
         Library.BookInfo book = Library.books.get(bookIndex);
         if (pageIndex < 0 || pageIndex >= book.pages.size()) { finish(); return; }
         final Library.PageInfo page = book.pages.get(pageIndex);
-        setTitle(book.title + " · page " + page.number);
+        setTitle(book.title + " · page " + Ui.num(page.number));
 
         ScrollView scroll = new ScrollView(this);
         final LinearLayout root = new LinearLayout(this);
@@ -44,22 +44,23 @@ public class PageActivity extends Activity {
         }));
         root.addView(nav);
 
-        root.addView(Ui.label(this, "Page " + page.number + " of " + book.pages.size(),
-                18, Ui.primary(this), true));
+        root.addView(Ui.label(this, "Page " + Ui.num(page.number) + " of "
+                + Ui.num(book.pages.size()), 18, Ui.primary(this), true));
         TextView text = Ui.label(this, page.text, 16, Ui.primary(this), false);
         text.setTextIsSelectable(true);
         root.addView(text);
 
         root.addView(Ui.divider(this));
-        root.addView(Ui.label(this, "Vocabulary on this page (" + page.vocabList.size() + ")",
-                16, Ui.primary(this), true));
+        root.addView(Ui.label(this, "Vocabulary on this page ("
+                + Ui.num(page.vocabList.size()) + ")", 16, Ui.primary(this), true));
         root.addView(Ui.label(this, "Tap a word to copy it or look up its meaning.",
                 12, Ui.faint(this), false));
 
         int limit = Math.min(page.vocabList.size(), 60);
         for (int i = 0; i < limit; i++) {
             final Library.VocabEntry v = page.vocabList.get(i);
-            TextView row = Ui.label(this, v.word + "   ×" + v.count, 15, Ui.blue(this), false);
+            TextView row = Ui.label(this, v.word + "   ×" + Ui.num(v.count),
+                    15, Ui.blue(this), false);
             row.setPadding(14, 6, 14, 6);
             row.setTextColor(Ui.blue(this));
             row.setOnClickListener(new View.OnClickListener() {
@@ -70,7 +71,8 @@ public class PageActivity extends Activity {
             root.addView(row);
         }
         if (page.vocabList.size() > limit) {
-            root.addView(Ui.label(this, "…and " + (page.vocabList.size() - limit)
+            root.addView(Ui.label(this, "…and "
+                    + Ui.num(page.vocabList.size() - limit)
                     + " more in the book's vocabulary list.", 12, Ui.faint(this), false));
         }
 

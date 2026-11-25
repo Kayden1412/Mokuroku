@@ -23,7 +23,7 @@ public class ReaderActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(16, 16, 16, 8);
-        root.addView(Ui.label(this, book.pages.size() + " pages. Tap a page to read it, "
+        root.addView(Ui.label(this, Ui.num(book.pages.size()) + " pages. Tap a page to read it, "
                 + "see its vocabulary and find books with similar content.",
                 13, Ui.secondary(this), false));
 
@@ -37,7 +37,7 @@ public class ReaderActivity extends Activity {
                 LinearLayout row = new LinearLayout(ReaderActivity.this);
                 row.setOrientation(LinearLayout.VERTICAL);
                 row.setPadding(16, 12, 16, 12);
-                row.addView(Ui.label(ReaderActivity.this, "Page " + page.number,
+                row.addView(Ui.label(ReaderActivity.this, "Page " + Ui.num(page.number),
                         15, Ui.primary(ReaderActivity.this), true));
                 row.addView(Ui.label(ReaderActivity.this, page.preview(),
                         12, Ui.secondary(ReaderActivity.this), false));

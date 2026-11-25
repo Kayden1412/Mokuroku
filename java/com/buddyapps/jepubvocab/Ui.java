@@ -25,7 +25,9 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.text.NumberFormat;
 import java.util.List;
+import java.util.Locale;
 
 final class Ui {
 
@@ -70,6 +72,11 @@ final class Ui {
 
     static int dp(Context c, int value) {
         return Math.round(value * c.getResources().getDisplayMetrics().density);
+    }
+
+    /** Group large counts with commas, e.g. 186743 -> 186,743. */
+    static String num(long value) {
+        return NumberFormat.getNumberInstance(Locale.US).format(value);
     }
 
     /** A compact Lucide icon button, tinted for the current theme. */

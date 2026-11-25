@@ -738,8 +738,8 @@ public final class Library {
         public HashMap<String, Integer> grams = new HashMap<String, Integer>();
 
         public String summary() {
-            return pages.size() + " pages  ·  " + charCount + " chars  ·  "
-                    + vocab.size() + " words";
+            return Ui.num(pages.size()) + " pages  ·  " + Ui.num(charCount)
+                    + " chars  ·  " + Ui.num(vocab.size()) + " words";
         }
     }
 

@@ -316,8 +316,9 @@ public class MainActivity extends Activity {
         });
         listAdapter.notifyDataSetChanged();
         gridAdapter.notifyDataSetChanged();
-        info.setText(Library.books.size() + " books  ·  " + Library.totalVocab()
-                + " unique words  ·  showing " + displayed.size());
+        info.setText(Ui.num(Library.books.size()) + " books  ·  "
+                + Ui.num(Library.totalVocab()) + " unique words  ·  showing "
+                + Ui.num(displayed.size()));
     }
 
     private void pick() {
@@ -360,7 +361,7 @@ public class MainActivity extends Activity {
 
     private void importUris(final List<Uri> uris) {
         final ProgressDialog progress = ProgressDialog.show(this, "Importing",
-                "Copying and parsing " + uris.size() + " EPUB file(s)…", true, false);
+                "Copying and parsing " + Ui.num(uris.size()) + " EPUB file(s)…", true, false);
         new Thread(new Runnable() {
             @Override public void run() {
                 final int[] added = {0};
