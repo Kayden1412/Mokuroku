@@ -1,0 +1,710 @@
+package com.buddyapps.jepubvocab;
+
+import android.content.Context;
+
+import java.io.BufferedInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.io.Serializable;
+import java.net.URLDecoder;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
+
+/**
+ * Holds the whole library in memory: books, their pages, extracted vocabulary and
+ * character-ngram profiles used to find books with similar content.
+ */
+public final class Library {
+
+    public static final ArrayList<BookInfo> books = new ArrayList<BookInfo>();
+
+    private static final int PAGE_CHARS = 1400;
+    private static final int MAX_PAGES = 400;
+    private static final int MAX_GRAMS = 180;
+    private static final long serialVersionUID = 1L;
+
+    private static File cacheFile;
+    private static HashMap<String, Integer> df = new HashMap<String, Integer>();
+
+    private Library() { }
+
+    public static void load(Context c) {
+        cacheFile = new File(c.getFilesDir(), "library.bin");
+        books.clear();
+        if (cacheFile.exists()) {
+            try {
+                ObjectInputStream in = new ObjectInputStream(
+                        new BufferedInputStream(new FileInputStream(cacheFile)));
+                try {
+                    Object o = in.readObject();
+                    if (o instanceof List) {
+                        for (Object x : (List<?>) o) {
+                            if (x instanceof BookInfo) books.add((BookInfo) x);
+                        }
+                    }
+                } finally {
+                    in.close();
+                }
+            } catch (Exception e) {
+                books.clear();
+            }
+        }
+        // A cached library is already parsed; only the in-memory similarity index
+        // needs rebuilding in that case.
+        if (books.isEmpty()) rebuild(c);
+        else prepare();
+    }
+
+    public static void rebuild(Context c) {
+        cacheFile = new File(c.getFilesDir(), "library.bin");
+        books.clear();
+        File dir = new File(c.getFilesDir(), "books");
+        if (dir.exists()) {
+            File[] files = dir.listFiles();
+            if (files != null) {
+                Arrays.sort(files, new Comparator<File>() {
+                    @Override public int compare(File a, File b) {
+                        return a.getName().compareToIgnoreCase(b.getName());
+                    }
+                });
+                for (File f : files) {
+                    if (f.isFile() && f.getName().toLowerCase().endsWith(".epub")) {
+                        BookInfo book = parseEpub(f);
+                        if (book != null) books.add(book);
+                    }
+                }
+            }
+        }
+        prepare();
+        save();
+    }
+
+    public static void deleteBook(Context c, BookInfo book) {
+        File dir = new File(c.getFilesDir(), "books");
+        File f = new File(dir, book.fileName);
+        if (f.exists()) f.delete();
+        rebuild(c);
+    }
+
+    public static File booksDir(Context c) {
+        return new File(c.getFilesDir(), "books");
+    }
+
+    public static int totalVocab() {
+        HashSet<String> all = new HashSet<String>();
+        for (BookInfo b : books) all.addAll(b.vocabMap.keySet());
+        return all.size();
+    }
+
+    private static void save() {
+        if (cacheFile == null) return;
+        try {
+            ObjectOutputStream out = new ObjectOutputStream(
+                    new FileOutputStream(cacheFile));
+            try {
+                out.writeObject(books);
+            } finally {
+                out.close();
+            }
+        } catch (Exception e) {
+            // A stale/incompatible cache is harmless: next launch rebuilds it.
+        }
+    }
+
+    /** Recomputes inverse document frequencies and book indexes. */
+    private static void prepare() {
+        df = new HashMap<String, Integer>();
+        for (int i = 0; i < books.size(); i++) {
+            BookInfo b = books.get(i);
+            b.index = i;
+            for (String g : b.grams.keySet()) {
+                Integer old = df.get(g);
+                df.put(g, old == null ? 1 : old + 1);
+            }
+        }
+    }
+
+    private static double weight(String gram, int count) {
+        Integer d = df.get(gram);
+        int docFreq = d == null ? 0 : d;
+        double idf = Math.log((books.size() + 1.0) / (docFreq + 1.0)) + 1.0;
+        return count * idf;
+    }
+
+    private static double similarity(Map<String, Integer> a, Map<String, Integer> b) {
+        if (a.isEmpty() || b.isEmpty() || books.size() < 2) return 0.0;
+        double dot = 0.0;
+        double na = 0.0;
+        for (Map.Entry<String, Integer> e : a.entrySet()) {
+            double wa = weight(e.getKey(), e.getValue());
+            na += wa * wa;
+            Integer cb = b.get(e.getKey());
+            if (cb != null) dot += wa * weight(e.getKey(), cb);
+        }
+        double nb = 0.0;
+        for (Map.Entry<String, Integer> e : b.entrySet()) {
+            double wb = weight(e.getKey(), e.getValue());
+            nb += wb * wb;
+        }
+        if (na <= 0 || nb <= 0) return 0.0;
+        double value = dot / Math.sqrt(na * nb);
+        if (value < 0) value = 0;
+        if (value > 1) value = 1;
+        return value;
+    }
+
+    public static List<SimilarInfo> similarToBook(BookInfo source) {
+        ArrayList<SimilarInfo> out = new ArrayList<SimilarInfo>();
+        for (BookInfo other : books) {
+            if (other.index == source.index) continue;
+            double score = similarity(source.grams, other.grams);
+            out.add(new SimilarInfo(other.index, score, sharedWords(source.vocabMap, other.vocabMap)));
+        }
+        Collections.sort(out);
+        if (out.size() > 6) return new ArrayList<SimilarInfo>(out.subList(0, 6));
+        return out;
+    }
+
+    public static List<SimilarInfo> similarToPage(PageInfo page, BookInfo source) {
+        ArrayList<SimilarInfo> out = new ArrayList<SimilarInfo>();
+        for (BookInfo other : books) {
+            if (other.index == source.index) continue;
+            double score = similarity(page.grams, other.grams);
+            out.add(new SimilarInfo(other.index, score, sharedWords(page.vocab, other.vocabMap)));
+        }
+        Collections.sort(out);
+        if (out.size() > 5) return new ArrayList<SimilarInfo>(out.subList(0, 5));
+        return out;
+    }
+
+    private static List<String> sharedWords(Map<String, Integer> a, Map<String, Integer> b) {
+        ArrayList<String> common = new ArrayList<String>();
+        ArrayList<String> sorted = new ArrayList<String>(a.keySet());
+        final Map<String, Integer> aa = a;
+        Collections.sort(sorted, new Comparator<String>() {
+            @Override public int compare(String x, String y) {
+                int c = aa.get(y).compareTo(aa.get(x));
+                return c != 0 ? c : x.compareTo(y);
+            }
+        });
+        for (String w : sorted) {
+            if (aa.get(w) < 2) continue;
+            Integer n = b.get(w);
+            if (n != null && n >= 2) {
+                common.add(w);
+                if (common.size() >= 5) break;
+            }
+        }
+        return common;
+    }
+
+    // ------------------------------------------------------------------ EPUB
+
+    private static BookInfo parseEpub(File file) {
+        try {
+            ZipFile zip = new ZipFile(file);
+            try {
+                byte[] container = readEntry(zip, "META-INF/container.xml");
+                String opfPath = null;
+                if (container != null) {
+                    Matcher m = Pattern.compile("full-path\\s*=\\s*\"([^\"]+)\"").matcher(
+                            new String(container, "UTF-8"));
+                    if (m.find()) opfPath = decodeRef(m.group(1));
+                }
+                if (opfPath == null) {
+                    Enumeration<? extends ZipEntry> en = zip.entries();
+                    while (en.hasMoreElements()) {
+                        String name = en.nextElement().getName();
+                        if (name.toLowerCase().endsWith(".opf")) { opfPath = name; break; }
+                    }
+                }
+                if (opfPath == null) return null;
+
+                byte[] opfBytes = readEntry(zip, opfPath);
+                if (opfBytes == null) return null;
+                String opf = new String(opfBytes, "UTF-8");
+                String title = "Untitled";
+                Matcher tm = Pattern.compile("<dc:title\\b[^>]*>(.*?)</dc:title>",
+                        Pattern.DOTALL | Pattern.CASE_INSENSITIVE).matcher(opf);
+                if (tm.find()) {
+                    title = htmlToText(tm.group(1)).trim();
+                }
+                if (title.isEmpty()) title = stripExtension(file.getName());
+
+                String opfDir = opfPath.contains("/")
+                        ? opfPath.substring(0, opfPath.lastIndexOf('/')) : "";
+                HashMap<String, String> manifest = new HashMap<String, String>();
+                Matcher im = Pattern.compile("<item\\b([^>]*)>", Pattern.CASE_INSENSITIVE)
+                        .matcher(opf);
+                while (im.find()) {
+                    String attrs = im.group(1);
+                    String id = attr(attrs, "id");
+                    String href = attr(attrs, "href");
+                    if (!id.isEmpty() && !href.isEmpty()) manifest.put(id, href);
+                }
+
+                ArrayList<String> hrefs = new ArrayList<String>();
+                Matcher sm = Pattern.compile("<itemref\\b([^>]*)>", Pattern.CASE_INSENSITIVE)
+                        .matcher(opf);
+                while (sm.find()) {
+                    String href = manifest.get(attr(sm.group(1), "idref"));
+                    if (href != null) hrefs.add(href);
+                }
+                if (hrefs.isEmpty()) {
+                    for (String href : manifest.values()) if (isHtml(href)) hrefs.add(href);
+                }
+                if (hrefs.isEmpty()) {
+                    Enumeration<? extends ZipEntry> en = zip.entries();
+                    while (en.hasMoreElements()) {
+                        String name = en.nextElement().getName();
+                        if (isHtml(name)) hrefs.add(name);
+                    }
+                    Collections.sort(hrefs);
+                }
+
+                StringBuilder all = new StringBuilder();
+                for (String href : hrefs) {
+                    if (!isHtml(href)) continue;
+                    String path = resolve(opfDir, href);
+                    byte[] data = readEntry(zip, path);
+                    if (data == null) continue;
+                    String text = htmlToText(new String(data, "UTF-8"));
+                    if (text.length() < 15) continue;
+                    if (all.length() > 0) all.append("\n\n");
+                    all.append(text);
+                    if (all.length() > 600000) break;
+                }
+                if (all.length() < 15) return null;
+
+                BookInfo book = new BookInfo();
+                book.title = title;
+                book.fileName = file.getName();
+                book.pages = splitPages(all.toString());
+                for (PageInfo page : book.pages) {
+                    for (Map.Entry<String, Integer> e : page.vocab.entrySet()) {
+                        Integer old = book.vocabMap.get(e.getKey());
+                        book.vocabMap.put(e.getKey(),
+                                old == null ? e.getValue() : old + e.getValue());
+                    }
+                    for (Map.Entry<String, String> e : page.snippets.entrySet()) {
+                        if (!book.snippets.containsKey(e.getKey())) {
+                            book.snippets.put(e.getKey(), e.getValue());
+                        }
+                    }
+                    for (Map.Entry<String, Integer> e : page.grams.entrySet()) {
+                        Integer old = book.grams.get(e.getKey());
+                        book.grams.put(e.getKey(),
+                                old == null ? e.getValue() : old + e.getValue());
+                    }
+                }
+                book.vocab = toVocabList(book.vocabMap, book.snippets);
+                trimGrams(book.grams);
+                for (PageInfo page : book.pages) trimGrams(page.grams);
+                return book;
+            } finally {
+                zip.close();
+            }
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static byte[] readEntry(ZipFile zip, String name) throws IOException {
+        ZipEntry entry = zip.getEntry(name);
+        if (entry == null) {
+            String tail = "/" + name;
+            Enumeration<? extends ZipEntry> en = zip.entries();
+            while (en.hasMoreElements()) {
+                ZipEntry z = en.nextElement();
+                String n = z.getName();
+                if (n.endsWith(tail) || n.equals(name)) { entry = z; break; }
+            }
+        }
+        if (entry == null) return null;
+        InputStream in = zip.getInputStream(entry);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        try {
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+        } finally {
+            in.close();
+        }
+        return out.toByteArray();
+    }
+
+    private static String attr(String attrs, String name) {
+        Matcher m = Pattern.compile("\\b" + Pattern.quote(name) + "\\s*=\\s*\"([^\"]*)\"",
+                Pattern.CASE_INSENSITIVE).matcher(attrs);
+        if (m.find()) return decodeRef(m.group(1));
+        m = Pattern.compile("\\b" + Pattern.quote(name) + "\\s*=\\s*'([^']*)'",
+                Pattern.CASE_INSENSITIVE).matcher(attrs);
+        if (m.find()) return decodeRef(m.group(1));
+        return "";
+    }
+
+    private static String decodeRef(String s) {
+        if (s.indexOf('%') < 0) return s;
+        try { return URLDecoder.decode(s, "UTF-8"); }
+        catch (Exception e) { return s; }
+    }
+
+    private static String resolve(String dir, String href) {
+        String path = href.split("#")[0].split("\\?")[0];
+        path = decodeRef(path).replace('\\', '/');
+        if (path.startsWith("/")) return path.substring(1);
+        ArrayList<String> parts = new ArrayList<String>();
+        if (!dir.isEmpty()) Collections.addAll(parts, dir.split("/"));
+        for (String p : path.split("/")) {
+            if (p.isEmpty() || p.equals(".")) continue;
+            if (p.equals("..")) {
+                if (!parts.isEmpty()) parts.remove(parts.size() - 1);
+            } else {
+                parts.add(p);
+            }
+        }
+        StringBuilder out = new StringBuilder();
+        for (String p : parts) {
+            if (out.length() > 0) out.append('/');
+            out.append(p);
+        }
+        return out.toString();
+    }
+
+    private static boolean isHtml(String name) {
+        String n = name.toLowerCase();
+        return n.endsWith(".html") || n.endsWith(".htm") || n.endsWith(".xhtml")
+                || n.contains("text/html");
+    }
+
+    private static String stripExtension(String name) {
+        int i = name.lastIndexOf('.');
+        return i > 0 ? name.substring(0, i) : name;
+    }
+
+    private static final Pattern ENTITY = Pattern.compile(
+            "&(#x[0-9a-fA-F]+|#[0-9]+|nbsp|amp|lt|gt|quot|apos|mdash|ndash|hellip);",
+            Pattern.CASE_INSENSITIVE);
+
+    private static String decodeEntities(String s) {
+        Matcher m = ENTITY.matcher(s);
+        StringBuffer out = new StringBuffer();
+        while (m.find()) {
+            String token = m.group(1);
+            String rep = "";
+            try {
+                if (token.startsWith("#x")) {
+                    rep = String.valueOf((char) Integer.parseInt(token.substring(2), 16));
+                } else if (token.startsWith("#")) {
+                    rep = String.valueOf((char) Integer.parseInt(token.substring(1)));
+                } else if (token.equalsIgnoreCase("nbsp")) {
+                    rep = " ";
+                } else if (token.equalsIgnoreCase("amp")) {
+                    rep = "&";
+                } else if (token.equalsIgnoreCase("lt")) {
+                    rep = "<";
+                } else if (token.equalsIgnoreCase("gt")) {
+                    rep = ">";
+                } else if (token.equalsIgnoreCase("quot")) {
+                    rep = "\"";
+                } else if (token.equalsIgnoreCase("apos")) {
+                    rep = "'";
+                } else if (token.equalsIgnoreCase("mdash")) {
+                    rep = "—";
+                } else if (token.equalsIgnoreCase("ndash")) {
+                    rep = "–";
+                } else if (token.equalsIgnoreCase("hellip")) {
+                    rep = "…";
+                }
+            } catch (Exception e) {
+                rep = m.group(0);
+            }
+            m.appendReplacement(out, Matcher.quoteReplacement(rep));
+        }
+        m.appendTail(out);
+        return out.toString();
+    }
+
+    private static String htmlToText(String html) {
+        String s = html.replaceAll("(?is)<(script|style|head)\\b[^>]*>.*?</\\1>", " ");
+        s = s.replaceAll("(?i)<br\\s*/?>", "\n");
+        s = s.replaceAll("(?i)</?(p|div|h[1-6]|li|tr|section|blockquote|article)\\b[^>]*>", "\n");
+        s = s.replaceAll("(?s)<[^>]+>", "");
+        s = decodeEntities(s);
+        s = s.replace('\u3000', ' ');
+        s = s.replaceAll("[ \\t\\r\\f]+", " ");
+        s = s.replaceAll(" *\\n *", "\n");
+        s = s.replaceAll("\\n{3,}", "\n\n");
+        return s.trim();
+    }
+
+    // -------------------------------------------------------------- tokenize
+
+    private static boolean isKanji(char c) {
+        return (c >= 0x4E00 && c <= 0x9FFF) || (c >= 0x3400 && c <= 0x4DBF);
+    }
+
+    private static boolean isHira(char c) {
+        return c >= 0x3040 && c <= 0x309F;
+    }
+
+    private static boolean isKata(char c) {
+        return (c >= 0x30A0 && c <= 0x30FF) || c == 0x30FC || c == 0x309B || c == 0x309C;
+    }
+
+    private static boolean isJapanese(char c) {
+        return isKanji(c) || isHira(c) || isKata(c);
+    }
+
+    private static final Set<String> STOP = new HashSet<String>(Arrays.asList(
+            "は", "が", "を", "に", "で", "と", "も", "の", "へ", "や", "か", "ね", "よ",
+            "わ", "お", "ご", "この", "その", "あの", "これ", "それ", "あれ", "ここ",
+            "そこ", "どこ", "だれ", "なん", "なに", "です", "ます", "ました", "でした",
+            "する", "した", "して", "ある", "いる", "なる", "なった", "いう", "ない",
+            "そして", "しかし", "また", "それで", "だから", "ので", "から", "まで",
+            "より", "など", "という", "そう", "こう", "どう", "どんな", "まず", "もし",
+            "ほか", "場合", "私", "彼女", "彼", "たち", "もの", "こと", "とき"));
+
+    private static HashMap<String, Integer> tokenize(String text, Map<String, String> snippets) {
+        HashMap<String, Integer> counts = new HashMap<String, Integer>();
+        int i = 0;
+        int len = text.length();
+        while (i < len) {
+            char c = text.charAt(i);
+            String word = null;
+            if (isKanji(c)) {
+                int j = i;
+                while (j < len && isKanji(text.charAt(j)) && j - i < 8) j++;
+                int k = j;
+                int okuri = 0;
+                while (k < len && isHira(text.charAt(k)) && okuri < 3) { k++; okuri++; }
+                word = text.substring(i, k);
+                i = k;
+            } else if (isHira(c)) {
+                int j = i;
+                while (j < len && isHira(text.charAt(j)) && j - i < 8) j++;
+                word = text.substring(i, j);
+                i = j;
+            } else if (isKata(c)) {
+                int j = i;
+                while (j < len && isKata(text.charAt(j)) && j - i < 16) j++;
+                word = text.substring(i, j);
+                i = j;
+            } else {
+                i++;
+            }
+            if (word == null || word.length() < 2 || STOP.contains(word)) continue;
+            if (isHira(word.charAt(0)) && word.length() < 2) continue;
+            Integer old = counts.get(word);
+            counts.put(word, old == null ? 1 : old + 1);
+            if (!snippets.containsKey(word)) {
+                int pos = i - word.length();
+                if (pos < 0 || !text.startsWith(word, pos)) pos = text.indexOf(word);
+                if (pos < 0) pos = 0;
+                int from = Math.max(0, pos - 18);
+                int to = Math.min(len, pos + word.length() + 22);
+                snippets.put(word, "…" + text.substring(from, to).replace('\n', ' ').trim() + "…");
+            }
+        }
+        return counts;
+    }
+
+    private static HashMap<String, Integer> makeGrams(String text) {
+        HashMap<String, Integer> grams = new HashMap<String, Integer>();
+        char prev = 0;
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (isJapanese(c)) {
+                if (prev != 0) {
+                    String g = "" + prev + c;
+                    Integer old = grams.get(g);
+                    grams.put(g, old == null ? 1 : old + 1);
+                }
+                prev = c;
+            } else {
+                prev = 0;
+            }
+        }
+        return grams;
+    }
+
+    private static void trimGrams(HashMap<String, Integer> grams) {
+        if (grams.size() <= MAX_GRAMS) return;
+        List<Map.Entry<String, Integer>> list =
+                new ArrayList<Map.Entry<String, Integer>>(grams.entrySet());
+        Collections.sort(list, new Comparator<Map.Entry<String, Integer>>() {
+            @Override public int compare(Map.Entry<String, Integer> a,
+                                         Map.Entry<String, Integer> b) {
+                int c = b.getValue().compareTo(a.getValue());
+                return c != 0 ? c : a.getKey().compareTo(b.getKey());
+            }
+        });
+        HashMap<String, Integer> kept = new HashMap<String, Integer>();
+        for (int i = 0; i < MAX_GRAMS && i < list.size(); i++) {
+            kept.put(list.get(i).getKey(), list.get(i).getValue());
+        }
+        grams.clear();
+        grams.putAll(kept);
+    }
+
+    private static ArrayList<VocabEntry> toVocabList(
+            final Map<String, Integer> counts, Map<String, String> snippets) {
+        ArrayList<String> words = new ArrayList<String>(counts.keySet());
+        Collections.sort(words, new Comparator<String>() {
+            @Override public int compare(String a, String b) {
+                int c = counts.get(b).compareTo(counts.get(a));
+                return c != 0 ? c : a.compareTo(b);
+            }
+        });
+        ArrayList<VocabEntry> out = new ArrayList<VocabEntry>();
+        for (String w : words) {
+            String s = snippets.get(w);
+            out.add(new VocabEntry(w, counts.get(w), s == null ? "" : s));
+        }
+        return out;
+    }
+
+    private static ArrayList<PageInfo> splitPages(String text) {
+        ArrayList<PageInfo> pages = new ArrayList<PageInfo>();
+        ArrayList<String> segments = new ArrayList<String>();
+        String[] paras = text.split("\\n+");
+        for (String para : paras) {
+            String p = para.trim();
+            if (p.isEmpty()) continue;
+            while (p.length() > PAGE_CHARS) {
+                segments.add(p.substring(0, PAGE_CHARS));
+                p = p.substring(PAGE_CHARS);
+            }
+            segments.add(p);
+        }
+        StringBuilder cur = new StringBuilder();
+        for (String seg : segments) {
+            if (cur.length() > 0 && cur.length() + seg.length() + 1 > PAGE_CHARS) {
+                pages.add(makePage(pages.size() + 1, cur.toString()));
+                cur.setLength(0);
+                if (pages.size() >= MAX_PAGES) break;
+            }
+            if (cur.length() > 0) cur.append('\n');
+            cur.append(seg);
+        }
+        if (cur.length() > 0 && pages.size() < MAX_PAGES) {
+            pages.add(makePage(pages.size() + 1, cur.toString()));
+        }
+        return pages;
+    }
+
+    private static PageInfo makePage(int number, String text) {
+        PageInfo page = new PageInfo();
+        page.number = number;
+        page.text = text;
+        page.vocab = tokenize(text, page.snippets);
+        page.grams = makeGrams(text);
+        page.vocabList = toVocabList(page.vocab, page.snippets);
+        if (!page.vocabList.isEmpty()) {
+            page.firstSnippetWord = page.vocabList.get(0).word;
+            page.firstSnippet = page.vocabList.get(0).snippet;
+        } else {
+            page.firstSnippetWord = "";
+            page.firstSnippet = "";
+        }
+        return page;
+    }
+
+    // ----------------------------------------------------------------- model
+
+    public static class BookInfo implements Serializable {
+        private static final long serialVersionUID = 1L;
+        public String title = "";
+        public String fileName = "";
+        public int index;
+        public ArrayList<PageInfo> pages = new ArrayList<PageInfo>();
+        public ArrayList<VocabEntry> vocab = new ArrayList<VocabEntry>();
+        public HashMap<String, Integer> vocabMap = new HashMap<String, Integer>();
+        public HashMap<String, String> snippets = new HashMap<String, String>();
+        public HashMap<String, Integer> grams = new HashMap<String, Integer>();
+
+        public String summary() {
+            return pages.size() + " pages  ·  " + vocab.size() + " words";
+        }
+    }
+
+    public static class PageInfo implements Serializable {
+        private static final long serialVersionUID = 1L;
+        public int number;
+        public String text = "";
+        public HashMap<String, Integer> vocab = new HashMap<String, Integer>();
+        public ArrayList<VocabEntry> vocabList = new ArrayList<VocabEntry>();
+        public HashMap<String, String> snippets = new HashMap<String, String>();
+        public HashMap<String, Integer> grams = new HashMap<String, Integer>();
+        public String firstSnippetWord = "";
+        public String firstSnippet = "";
+
+        public String preview() {
+            String s = text.replace('\n', ' ').trim();
+            return s.length() > 80 ? s.substring(0, 80) + "…" : s;
+        }
+    }
+
+    public static class VocabEntry implements Serializable {
+        private static final long serialVersionUID = 1L;
+        public String word;
+        public int count;
+        public String snippet;
+
+        public VocabEntry(String word, int count, String snippet) {
+            this.word = word;
+            this.count = count;
+            this.snippet = snippet == null ? "" : snippet;
+        }
+    }
+
+    public static class SimilarInfo implements Serializable, Comparable<SimilarInfo> {
+        private static final long serialVersionUID = 1L;
+        public int bookIndex;
+        public double score;
+        public List<String> shared;
+
+        public SimilarInfo(int bookIndex, double score, List<String> shared) {
+            this.bookIndex = bookIndex;
+            this.score = score;
+            this.shared = shared;
+        }
+
+        @Override public int compareTo(SimilarInfo other) {
+            int c = Double.compare(other.score, this.score);
+            return c != 0 ? c : Integer.compare(this.bookIndex, other.bookIndex);
+        }
+
+        public String percent() {
+            return Math.round(score * 100) + "%";
+        }
+
+        public String sharedText() {
+            if (shared == null || shared.isEmpty()) return "";
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < shared.size(); i++) {
+                if (i > 0) sb.append(", ");
+                sb.append(shared.get(i));
+            }
+            return "Shared: " + sb.toString();
+        }
+    }
+}
