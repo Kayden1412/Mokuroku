@@ -5,6 +5,7 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 
 import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -54,6 +55,7 @@ public final class Library {
     public static void load(Context c) {
         cacheFile = new File(c.getFilesDir(), "library.bin");
         books.clear();
+        boolean cacheOk = false;
         if (cacheFile.exists()) {
             try {
                 ObjectInputStream in = new ObjectInputStream(
@@ -65,17 +67,76 @@ public final class Library {
                             if (x instanceof BookInfo) books.add((BookInfo) x);
                         }
                     }
+                    cacheOk = true;
                 } finally {
                     in.close();
                 }
-            } catch (Exception e) {
+            } catch (Throwable e) {
+                // A cache left half-written by a crash is safe to ignore.
                 books.clear();
             }
         }
-        // A cached library is already parsed; only the in-memory similarity index
-        // needs rebuilding in that case.
-        if (books.isEmpty()) rebuild(c);
-        else prepare();
+        // An import can crash after copying its EPUBs but before saving the cache.
+        // Parse only the missing files instead of the entire library on next launch.
+        SyncResult sync = syncWithDisk(c);
+        if (!cacheOk || sync.changed) {
+            prepare();
+            save();
+        } else {
+            prepare();
+        }
+    }
+
+    /** Adds EPUBs that were copied to disk after the cache was last saved. */
+    public static int importNew(Context c) {
+        if (cacheFile == null) cacheFile = new File(c.getFilesDir(), "library.bin");
+        SyncResult sync = syncWithDisk(c);
+        if (sync.changed) {
+            prepare();
+            save();
+        }
+        return sync.added;
+    }
+
+    private static final class SyncResult {
+        int added;
+        boolean changed;
+    }
+
+    /** Reconciles the in-memory library with the EPUB files in private storage. */
+    private static SyncResult syncWithDisk(Context c) {
+        SyncResult result = new SyncResult();
+        File dir = new File(c.getFilesDir(), "books");
+        if (!dir.exists()) dir.mkdirs();
+        HashSet<String> known = new HashSet<String>();
+        for (BookInfo b : books) known.add(b.fileName);
+        File[] files = dir.listFiles();
+        if (files != null) {
+            Arrays.sort(files, new Comparator<File>() {
+                @Override public int compare(File a, File b) {
+                    return a.getName().compareToIgnoreCase(b.getName());
+                }
+            });
+            for (File f : files) {
+                if (!f.isFile() || !f.getName().toLowerCase().endsWith(".epub")) continue;
+                if (known.contains(f.getName())) continue;
+                BookInfo book = parseEpub(f);
+                if (book != null) {
+                    books.add(book);
+                    known.add(f.getName());
+                    result.added++;
+                    result.changed = true;
+                }
+            }
+        }
+        for (int i = books.size() - 1; i >= 0; i--) {
+            File f = new File(dir, books.get(i).fileName);
+            if (!f.isFile() || f.length() == 0) {
+                books.remove(i);
+                result.changed = true;
+            }
+        }
+        return result;
     }
 
     public static void rebuild(Context c) {
@@ -106,7 +167,9 @@ public final class Library {
         File dir = new File(c.getFilesDir(), "books");
         File f = new File(dir, book.fileName);
         if (f.exists()) f.delete();
-        rebuild(c);
+        books.remove(book);
+        prepare();
+        save();
     }
 
     public static File booksDir(Context c) {
@@ -121,16 +184,23 @@ public final class Library {
 
     private static void save() {
         if (cacheFile == null) return;
+        File tmp = new File(cacheFile.getParentFile(), "library.bin.tmp");
         try {
             ObjectOutputStream out = new ObjectOutputStream(
-                    new FileOutputStream(cacheFile));
+                    new BufferedOutputStream(new FileOutputStream(tmp)));
             try {
                 out.writeObject(books);
             } finally {
                 out.close();
             }
-        } catch (Exception e) {
-            // A stale/incompatible cache is harmless: next launch rebuilds it.
+            // Only replace the live cache once the new file is complete: a crash
+            // mid-write must never leave a truncated library.bin for next launch.
+            if (!tmp.renameTo(cacheFile)) {
+                if (cacheFile.exists()) cacheFile.delete();
+                if (!tmp.renameTo(cacheFile)) tmp.delete();
+            }
+        } catch (Throwable e) {
+            tmp.delete();
         }
     }
 
@@ -163,6 +233,8 @@ public final class Library {
                 bookGramNorm[i] += w * w;
             }
         }
+        // Book indexes can change when books are added or removed.
+        Ui.clearCovers();
     }
 
     private static double weight(String gram, int count) {
@@ -373,7 +445,9 @@ public final class Library {
             } finally {
                 zip.close();
             }
-        } catch (Exception e) {
+        } catch (Throwable e) {
+            // OutOfMemoryError is an Error, not an Exception. A single oversized
+            // EPUB must not take down the whole import or the app.
             return null;
         }
     }
@@ -559,7 +633,19 @@ public final class Library {
 
     private static byte[] compressCover(byte[] data) {
         try {
-            Bitmap bm = BitmapFactory.decodeByteArray(data, 0, data.length);
+            // Decode a downscaled sample first: full-size covers in some EPUBs
+            // are large enough to exhaust the heap during BitmapFactory.decode.
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            BitmapFactory.decodeByteArray(data, 0, data.length, bounds);
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null;
+            int sample = 1;
+            while (bounds.outWidth / sample > 720 || bounds.outHeight / sample > 960) {
+                sample *= 2;
+            }
+            BitmapFactory.Options opts = new BitmapFactory.Options();
+            opts.inSampleSize = sample;
+            Bitmap bm = BitmapFactory.decodeByteArray(data, 0, data.length, opts);
             if (bm == null) return null;
             int w = bm.getWidth();
             int h = bm.getHeight();
@@ -573,7 +659,7 @@ public final class Library {
             if (small != bm) small.recycle();
             bm.recycle();
             return out.toByteArray();
-        } catch (Exception e) {
+        } catch (Throwable e) {
             return null;
         }
     }

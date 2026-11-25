@@ -182,13 +182,23 @@ public class MainActivity extends Activity {
                 "Loading library…", true, false);
         new Thread(new Runnable() {
             @Override public void run() {
-                JMDict.load(MainActivity.this);
-                JitenRank.load(MainActivity.this);
-                Library.load(MainActivity.this);
+                final Throwable[] failure = new Throwable[1];
+                try {
+                    JMDict.load(MainActivity.this);
+                    JitenRank.load(MainActivity.this);
+                    Library.load(MainActivity.this);
+                } catch (Throwable e) {
+                    failure[0] = e;
+                }
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
                         loading.dismiss();
                         refresh();
+                        if (failure[0] != null) {
+                            Toast.makeText(MainActivity.this,
+                                    "Could not load library: " + failure[0].getMessage(),
+                                    Toast.LENGTH_LONG).show();
+                        }
                     }
                 });
             }
@@ -366,17 +376,36 @@ public class MainActivity extends Activity {
         new Thread(new Runnable() {
             @Override public void run() {
                 final int[] added = {0};
-                for (Uri uri : uris) {
-                    if (copyUri(uri)) added[0]++;
+                final Throwable[] failure = new Throwable[1];
+                try {
+                    for (int i = 0; i < uris.size(); i++) {
+                        copyUri(uris.get(i));
+                        final int done = i + 1;
+                        runOnUiThread(new Runnable() {
+                            @Override public void run() {
+                                progress.setMessage("Copying " + Ui.num(done) + " of "
+                                        + Ui.num(uris.size()) + "…");
+                            }
+                        });
+                    }
+                    // Parse only the new files; existing books stay cached.
+                    added[0] = Library.importNew(MainActivity.this);
+                } catch (Throwable e) {
+                    failure[0] = e;
                 }
-                Library.rebuild(MainActivity.this);
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
                         progress.dismiss();
                         refresh();
-                        Toast.makeText(MainActivity.this,
-                                "Imported " + added[0] + " new EPUB(s)", Toast.LENGTH_SHORT)
-                                .show();
+                        if (failure[0] != null) {
+                            Toast.makeText(MainActivity.this,
+                                    "Import failed: " + failure[0].getMessage(),
+                                    Toast.LENGTH_LONG).show();
+                        } else {
+                            Toast.makeText(MainActivity.this,
+                                    "Imported " + Ui.num(added[0]) + " new EPUB(s)",
+                                    Toast.LENGTH_SHORT).show();
+                        }
                     }
                 });
             }
@@ -388,11 +417,21 @@ public class MainActivity extends Activity {
                 "Parsing your EPUB library…", true, false);
         new Thread(new Runnable() {
             @Override public void run() {
-                Library.rebuild(MainActivity.this);
+                final Throwable[] failure = new Throwable[1];
+                try {
+                    Library.rebuild(MainActivity.this);
+                } catch (Throwable e) {
+                    failure[0] = e;
+                }
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
                         progress.dismiss();
                         refresh();
+                        if (failure[0] != null) {
+                            Toast.makeText(MainActivity.this,
+                                    "Reload failed: " + failure[0].getMessage(),
+                                    Toast.LENGTH_LONG).show();
+                        }
                     }
                 });
             }

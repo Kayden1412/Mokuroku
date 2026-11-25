@@ -40,6 +40,10 @@ final class Ui {
 
     private Ui() { }
 
+    static void clearCovers() {
+        COVERS.evictAll();
+    }
+
     /** True when the system (and therefore the DayNight theme) is in dark mode. */
     static boolean dark(Context c) {
         return (c.getResources().getConfiguration().uiMode
@@ -102,7 +106,7 @@ final class Ui {
             try {
                 bm = BitmapFactory.decodeByteArray(book.cover, 0, book.cover.length);
                 if (bm != null) COVERS.put(book.index, bm);
-            } catch (Exception e) {
+            } catch (Throwable e) {
                 return null;
             }
         }
