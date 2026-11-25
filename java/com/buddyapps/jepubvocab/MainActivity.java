@@ -117,9 +117,19 @@ public class MainActivity extends Activity {
         i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
                 | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
         try {
-            startActivityForResult(Intent.createChooser(i, "Select Japanese EPUBs"), PICK_EPUBS);
+            // Do not wrap this in createChooser(): on some phones the chooser
+            // resolves to nothing and shows "No apps to share to".
+            startActivityForResult(i, PICK_EPUBS);
         } catch (Exception e) {
-            Toast.makeText(this, "No file picker available", Toast.LENGTH_SHORT).show();
+            try {
+                Intent fallback = new Intent(Intent.ACTION_GET_CONTENT);
+                fallback.setType("*/*");
+                fallback.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                fallback.addCategory(Intent.CATEGORY_OPENABLE);
+                startActivityForResult(fallback, PICK_EPUBS);
+            } catch (Exception e2) {
+                Toast.makeText(this, "No file picker available", Toast.LENGTH_SHORT).show();
+            }
         }
     }
 
