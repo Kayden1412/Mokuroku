@@ -14,29 +14,7 @@ An Android app for Japanese EPUBs. Pick many `.epub` files, and it parses them i
 
 Tapping a vocabulary word copies it, looks it up offline, or opens Jisho.
 
-## Build with GitHub Actions (manual)
-
-Nothing is downloaded until you run the workflow.
-
-1. Create a new GitHub repository and push this folder to it:
-
-   ```sh
-   cd jepubvocab
-   git init
-   git add .
-   git commit -m "Mokuroku app"
-   git remote add origin https://github.com/<your-name>/<repo>.git
-   git push -u origin main
-   ```
-
-2. In the repo, open **Actions → Build Mokuroku APK → Run workflow**.
-3. When the run finishes, download the `epub-vocab-apk` artifact from the run page.
-4. Unzip it, open `app.apk` on your phone and tap Install (you may need to allow
-   "Install unknown apps" for your browser/files app).
-
-The signing key is cached in the repository, so you can install over an older build
-without uninstalling first.
-
+##Credits
 Toolbar icons are from [Lucide](https://lucide.dev/) (ISC License).
 
 Definitions are from [JMdict](https://www.edrdg.org/jmdict/edict_doc.html)
@@ -49,7 +27,7 @@ Matcher word ranks come from [Jiten's global frequency dictionary](https://jiten
 (CC BY-SA 4.0); regenerate the embedded top 100,000 entries with
 `scripts/gen_jiten_rank.py` from its Global CSV.
 
-## Build locally (optional)
+## Build Locally
 
 Requires the Android build toolchain (JDK 17, Android 36 platform, build-tools 36):
 
