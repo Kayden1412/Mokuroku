@@ -1,4 +1,4 @@
-name: Build EPUB Vocab APK
+name: Build Mokuroku APK
 
 # Manual only: nothing runs or downloads until you click "Run workflow".
 on:

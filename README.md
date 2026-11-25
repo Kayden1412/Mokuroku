@@ -1,4 +1,4 @@
-# EPUB Vocab
+# Mokuroku
 
 An Android app for Japanese EPUBs. Pick many `.epub` files, and it parses them into:
 
@@ -20,12 +20,12 @@ Nothing is downloaded until you run the workflow.
    cd jepubvocab
    git init
    git add .
-   git commit -m "EPUB Vocab app"
+   git commit -m "Mokuroku app"
    git remote add origin https://github.com/<your-name>/<repo>.git
    git push -u origin main
    ```
 
-2. In the repo, open **Actions → Build EPUB Vocab APK → Run workflow**.
+2. In the repo, open **Actions → Build Mokuroku APK → Run workflow**.
 3. When the run finishes, download the `epub-vocab-apk` artifact from the run page.
 4. Unzip it, open `app.apk` on your phone and tap Install (you may need to allow
    "Install unknown apps" for your browser/files app).

@@ -5,7 +5,7 @@
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
     <application
-        android:label="EPUB Vocab"
+        android:label="Mokuroku"
         android:theme="@android:style/Theme.DeviceDefault"
         android:icon="@android:drawable/sym_def_app_icon"
         android:allowBackup="true">
