@@ -30,6 +30,7 @@ import android.widget.Toast;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -269,17 +270,44 @@ public class MainActivity extends Activity {
                 .show();
     }
 
-    private boolean matches(Library.BookInfo book, String query) {
-        if (book.title.toLowerCase(Locale.ROOT).contains(query)) return true;
-        if (book.fileName.toLowerCase(Locale.ROOT).contains(query)) return true;
+    // Titles often contain spaces between Japanese words ("くま クマ 熊 ベアー"),
+    // so ignore whitespace and unify full/half-width characters when searching.
+    private static String normalize(String s) {
+        String n = Normalizer.normalize(s, Normalizer.Form.NFKC).toLowerCase(Locale.ROOT);
+        StringBuilder out = new StringBuilder(n.length());
+        for (int i = 0; i < n.length(); i++) {
+            char c = n.charAt(i);
+            if (!Character.isWhitespace(c)) out.append(c);
+        }
+        return out.toString();
+    }
+
+    private boolean hasText(Library.BookInfo book, String q) {
+        if (normalize(book.title).contains(q)) return true;
+        if (normalize(book.fileName).contains(q)) return true;
         for (String word : book.vocabMap.keySet()) {
-            if (word.toLowerCase(Locale.ROOT).contains(query)) return true;
+            if (normalize(word).contains(q)) return true;
         }
         return false;
     }
 
+    private boolean matches(Library.BookInfo book, String query) {
+        String q = normalize(query);
+        if (q.isEmpty()) return true;
+        if (hasText(book, q)) return true;
+        // "くま ベアー" should find a title with other words in between.
+        String[] tokens = query.trim().split("\\s+");
+        if (tokens.length < 2) return false;
+        for (String token : tokens) {
+            String t = normalize(token);
+            if (!normalize(book.title).contains(t)
+                    && !normalize(book.fileName).contains(t)) return false;
+        }
+        return true;
+    }
+
     private void refresh() {
-        String query = search.getText().toString().trim().toLowerCase(Locale.ROOT);
+        String query = search.getText().toString().trim();
         displayed.clear();
         for (Library.BookInfo book : Library.books) {
             if (!query.isEmpty() && !matches(book, query)) continue;
