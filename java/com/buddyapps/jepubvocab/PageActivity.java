@@ -22,7 +22,7 @@ public class PageActivity extends Activity {
         bookIndex = getIntent().getIntExtra("book", -1);
         pageIndex = getIntent().getIntExtra("page", -1);
         if (bookIndex < 0 || bookIndex >= Library.books.size()) { finish(); return; }
-        Library.BookInfo book = Library.books.get(bookIndex);
+        final Library.BookInfo book = Library.books.get(bookIndex);
         if (pageIndex < 0 || pageIndex >= book.pages.size()) { finish(); return; }
         final Library.PageInfo page = book.pages.get(pageIndex);
         setTitle(book.title + " · page " + Ui.num(page.number));
@@ -78,25 +78,53 @@ public class PageActivity extends Activity {
 
         root.addView(Ui.divider(this));
         root.addView(Ui.label(this, "Books with similar content", 16, Ui.primary(this), true));
-        List<Library.SimilarInfo> similar = Library.similarToPage(page, book);
-        if (similar.isEmpty()) {
-            root.addView(Ui.label(this, "Add more EPUBs to compare.", 13, Ui.faint(this), false));
-        }
-        for (final Library.SimilarInfo s : similar) {
-            Library.BookInfo other = Library.books.get(s.bookIndex);
-            String sub = s.percent() + " match";
-            if (!s.sharedText().isEmpty()) sub += "  ·  " + s.sharedText();
-            TextView row = Ui.label(this, other.title + "  —  " + sub,
-                    14, Ui.blue(this), false);
-            row.setPadding(14, 8, 14, 8);
-            row.setTextColor(Ui.green(this));
-            row.setOnClickListener(new View.OnClickListener() {
-                @Override public void onClick(View view) {
-                    Ui.openBook(PageActivity.this, s.bookIndex);
+        final TextView waitNote = Ui.label(this, "Finding similar books…",
+                13, Ui.faint(this), false);
+        root.addView(waitNote);
+        new Thread(new Runnable() {
+            @Override public void run() {
+                final List<Library.SimilarInfo> similar;
+                try {
+                    similar = Library.similarToPage(page, book);
+                } catch (Throwable e) {
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            if (isFinishing()) return;
+                            root.removeView(waitNote);
+                        }
+                    });
+                    return;
                 }
-            });
-            root.addView(row);
-        }
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        if (isFinishing()) return;
+                        root.removeView(waitNote);
+                        if (similar.isEmpty()) {
+                            root.addView(Ui.label(PageActivity.this,
+                                    "Add more EPUBs to compare.", 13,
+                                    Ui.faint(PageActivity.this), false));
+                            return;
+                        }
+                        for (final Library.SimilarInfo s : similar) {
+                            Library.BookInfo other = Library.books.get(s.bookIndex);
+                            String sub = s.percent() + " match";
+                            if (!s.sharedText().isEmpty()) sub += "  ·  " + s.sharedText();
+                            TextView row = Ui.label(PageActivity.this,
+                                    other.title + "  —  " + sub,
+                                    14, Ui.blue(PageActivity.this), false);
+                            row.setPadding(14, 8, 14, 8);
+                            row.setTextColor(Ui.green(PageActivity.this));
+                            row.setOnClickListener(new View.OnClickListener() {
+                                @Override public void onClick(View view) {
+                                    Ui.openBook(PageActivity.this, s.bookIndex);
+                                }
+                            });
+                            root.addView(row);
+                        }
+                    }
+                });
+            }
+        }).start();
     }
 
     private ImageButton navButton(int icon, String description, View.OnClickListener listener) {

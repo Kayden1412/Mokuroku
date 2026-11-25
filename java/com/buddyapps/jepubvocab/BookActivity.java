@@ -24,6 +24,7 @@ public class BookActivity extends Activity {
     private int bookIndex;
     private int minMatch;
     private List<Library.SimilarInfo> allSimilar = new ArrayList<Library.SimilarInfo>();
+    private boolean computingSimilar = true;
     private final ArrayList<Library.SimilarInfo> displayed = new ArrayList<Library.SimilarInfo>();
     private ArrayAdapter<Library.SimilarInfo> similarAdapter;
     private TextView filterLabel;
@@ -80,7 +81,9 @@ public class BookActivity extends Activity {
                 "Based on shared words and character patterns across your library.",
                 12, Ui.faint(this), false));
 
-        allSimilar = Library.similarToBook(book);
+        // Similarity scans the whole library; compute it off the UI thread so
+        // opening a book stays instant. Results are cached by Library.
+        allSimilar = new ArrayList<Library.SimilarInfo>();
 
         LinearLayout filter = new LinearLayout(this);
         filter.setOrientation(LinearLayout.HORIZONTAL);
@@ -136,6 +139,33 @@ public class BookActivity extends Activity {
 
         applyFilter();
         setContentView(root);
+
+        final Library.BookInfo source = book;
+        new Thread(new Runnable() {
+            @Override public void run() {
+                final List<Library.SimilarInfo> found;
+                try {
+                    found = Library.similarToBook(source);
+                } catch (Throwable e) {
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            if (isFinishing()) return;
+                            computingSimilar = false;
+                            applyFilter();
+                        }
+                    });
+                    return;
+                }
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        if (isFinishing()) return;
+                        allSimilar = found;
+                        computingSimilar = false;
+                        applyFilter();
+                    }
+                });
+            }
+        }).start();
     }
 
     private void applyFilter() {
@@ -147,9 +177,13 @@ public class BookActivity extends Activity {
         if (similarAdapter != null) similarAdapter.notifyDataSetChanged();
         if (emptyNote != null) {
             emptyNote.setVisibility(displayed.isEmpty() ? View.VISIBLE : View.GONE);
-            emptyNote.setText(allSimilar.isEmpty()
-                    ? "Add more EPUBs to see similar books here."
-                    : "No books match at least " + minMatch + "%.");
+            if (computingSimilar) {
+                emptyNote.setText("Finding similar books…");
+            } else {
+                emptyNote.setText(allSimilar.isEmpty()
+                        ? "Add more EPUBs to see similar books here."
+                        : "No books match at least " + minMatch + "%.");
+            }
         }
     }
 

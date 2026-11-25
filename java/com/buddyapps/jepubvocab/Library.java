@@ -49,6 +49,8 @@ public final class Library {
     private static HashMap<String, Integer> wordDf = new HashMap<String, Integer>();
     private static double[] bookWordNorm = new double[0];
     private static double[] bookGramNorm = new double[0];
+    private static final HashMap<Integer, List<SimilarInfo>> bookSimilarCache =
+            new HashMap<Integer, List<SimilarInfo>>();
 
     private Library() { }
 
@@ -235,6 +237,7 @@ public final class Library {
         }
         // Book indexes can change when books are added or removed.
         Ui.clearCovers();
+        bookSimilarCache.clear();
     }
 
     private static double weight(String gram, int count) {
@@ -290,14 +293,22 @@ public final class Library {
     }
 
     public static List<SimilarInfo> similarToBook(BookInfo source) {
+        List<SimilarInfo> cached = bookSimilarCache.get(source.index);
+        if (cached != null) return cached;
         ArrayList<SimilarInfo> out = new ArrayList<SimilarInfo>();
         for (BookInfo other : books) {
             if (other.index == source.index) continue;
             double score = matchScore(source.vocabMap, source.grams, other);
-            out.add(new SimilarInfo(other.index, score, sharedWords(source.vocabMap, other.vocabMap)));
+            out.add(new SimilarInfo(other.index, score, null));
         }
         Collections.sort(out);
-        if (out.size() > 6) return new ArrayList<SimilarInfo>(out.subList(0, 6));
+        if (out.size() > 6) out = new ArrayList<SimilarInfo>(out.subList(0, 6));
+        // Sorting the source vocabulary is expensive: only do it for the books
+        // that actually made the shortlist, not for every title in the library.
+        for (SimilarInfo s : out) {
+            s.shared = sharedWords(source.vocabMap, books.get(s.bookIndex).vocabMap);
+        }
+        bookSimilarCache.put(source.index, out);
         return out;
     }
 
@@ -306,10 +317,13 @@ public final class Library {
         for (BookInfo other : books) {
             if (other.index == source.index) continue;
             double score = matchScore(page.vocab, page.grams, other);
-            out.add(new SimilarInfo(other.index, score, sharedWords(page.vocab, other.vocabMap)));
+            out.add(new SimilarInfo(other.index, score, null));
         }
         Collections.sort(out);
-        if (out.size() > 5) return new ArrayList<SimilarInfo>(out.subList(0, 5));
+        if (out.size() > 5) out = new ArrayList<SimilarInfo>(out.subList(0, 5));
+        for (SimilarInfo s : out) {
+            s.shared = sharedWords(page.vocab, books.get(s.bookIndex).vocabMap);
+        }
         return out;
     }
 
