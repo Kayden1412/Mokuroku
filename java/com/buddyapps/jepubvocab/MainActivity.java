@@ -111,6 +111,7 @@ public class MainActivity extends Activity {
                 refresh();
             }
         }, 1f);
+        row2.add(orderButton);
         root.addView(row2.view());
 
         holder = new FrameLayout(this);
