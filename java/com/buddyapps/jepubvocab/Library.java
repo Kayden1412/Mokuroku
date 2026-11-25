@@ -790,8 +790,12 @@ public final class Library {
             return c != 0 ? c : Integer.compare(this.bookIndex, other.bookIndex);
         }
 
+        public int percentValue() {
+            return Math.round(score * 100);
+        }
+
         public String percent() {
-            return Math.round(score * 100) + "%";
+            return percentValue() + "%";
         }
 
         public String sharedText() {

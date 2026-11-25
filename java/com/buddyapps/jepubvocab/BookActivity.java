@@ -3,6 +3,7 @@ package com.buddyapps.jepubvocab;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.DialogInterface;
+import android.content.res.ColorStateList;
 import android.os.Bundle;
 import android.view.View;
 import android.view.ViewGroup;
@@ -11,19 +12,29 @@ import android.widget.ArrayAdapter;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ListView;
+import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.util.ArrayList;
 import java.util.List;
 
 public class BookActivity extends Activity {
 
     private int bookIndex;
+    private int minMatch;
+    private List<Library.SimilarInfo> allSimilar = new ArrayList<Library.SimilarInfo>();
+    private final ArrayList<Library.SimilarInfo> displayed = new ArrayList<Library.SimilarInfo>();
+    private ArrayAdapter<Library.SimilarInfo> similarAdapter;
+    private TextView filterLabel;
+    private TextView emptyNote;
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         bookIndex = getIntent().getIntExtra("book", -1);
         if (!valid()) { finish(); return; }
+        minMatch = getSharedPreferences("mokuroku", MODE_PRIVATE)
+                .getInt("min_match", 0);
         final Library.BookInfo book = Library.books.get(bookIndex);
         setTitle(book.title);
 
@@ -69,12 +80,40 @@ public class BookActivity extends Activity {
                 "Based on shared words and character patterns across your library.",
                 12, Ui.faint(this), false));
 
-        final List<Library.SimilarInfo> similar = Library.similarToBook(book);
+        allSimilar = Library.similarToBook(book);
+
+        LinearLayout filter = new LinearLayout(this);
+        filter.setOrientation(LinearLayout.HORIZONTAL);
+        filterLabel = Ui.label(this, "", 13, Ui.secondary(this), false);
+        filterLabel.setLayoutParams(new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        SeekBar seek = new SeekBar(this);
+        seek.setContentDescription("Minimum match percentage");
+        seek.setMax(100);
+        seek.setProgress(minMatch);
+        seek.setProgressTintList(ColorStateList.valueOf(Ui.blue(this)));
+        seek.setThumbTintList(ColorStateList.valueOf(Ui.blue(this)));
+        seek.setLayoutParams(new LinearLayout.LayoutParams(Ui.dp(this, 180),
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar s, int progress, boolean fromUser) {
+                minMatch = progress;
+                getSharedPreferences("mokuroku", MODE_PRIVATE).edit()
+                        .putInt("min_match", minMatch).apply();
+                applyFilter();
+            }
+            @Override public void onStartTrackingTouch(SeekBar s) { }
+            @Override public void onStopTrackingTouch(SeekBar s) { }
+        });
+        filter.addView(filterLabel);
+        filter.addView(seek);
+        root.addView(filter);
+
         ListView list = new ListView(this);
         list.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
-        list.setAdapter(new ArrayAdapter<Library.SimilarInfo>(this,
-                android.R.layout.simple_list_item_1, similar) {
+        similarAdapter = new ArrayAdapter<Library.SimilarInfo>(this,
+                android.R.layout.simple_list_item_1, displayed) {
             @Override public View getView(int position, View convertView, ViewGroup parent) {
                 Library.SimilarInfo s = getItem(position);
                 Library.BookInfo other = Library.books.get(s.bookIndex);
@@ -82,21 +121,36 @@ public class BookActivity extends Activity {
                 if (!s.sharedText().isEmpty()) subtitle += "  ·  " + s.sharedText();
                 return Ui.bookRow(BookActivity.this, other, subtitle);
             }
-        });
+        };
+        list.setAdapter(similarAdapter);
         list.setOnItemClickListener(new AdapterView.OnItemClickListener() {
             @Override public void onItemClick(AdapterView<?> p, View v, int pos, long id) {
-                Ui.openBook(BookActivity.this, similar.get(pos).bookIndex);
+                Ui.openBook(BookActivity.this, displayed.get(pos).bookIndex);
             }
         });
         root.addView(list);
 
-        if (similar.isEmpty()) {
-            TextView note = Ui.label(this,
-                    "Add more EPUBs to see similar books here.", 14, Ui.faint(this), false);
-            note.setPadding(16, 24, 16, 24);
-            root.addView(note);
-        }
+        emptyNote = Ui.label(this, "", 14, Ui.faint(this), false);
+        emptyNote.setPadding(16, 24, 16, 24);
+        root.addView(emptyNote);
+
+        applyFilter();
         setContentView(root);
+    }
+
+    private void applyFilter() {
+        filterLabel.setText("Minimum match: " + minMatch + "%");
+        displayed.clear();
+        for (Library.SimilarInfo s : allSimilar) {
+            if (s.percentValue() >= minMatch) displayed.add(s);
+        }
+        if (similarAdapter != null) similarAdapter.notifyDataSetChanged();
+        if (emptyNote != null) {
+            emptyNote.setVisibility(displayed.isEmpty() ? View.VISIBLE : View.GONE);
+            emptyNote.setText(allSimilar.isEmpty()
+                    ? "Add more EPUBs to see similar books here."
+                    : "No books match at least " + minMatch + "%.");
+        }
     }
 
     private ImageButton action(int icon, String description, View.OnClickListener listener) {
