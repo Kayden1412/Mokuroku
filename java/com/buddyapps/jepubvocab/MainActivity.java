@@ -51,6 +51,8 @@ public class MainActivity extends Activity {
     private Button sortButton;
     private ListView list;
     private GridView grid;
+    private FrameLayout holder;
+    private TextView emptyView;
     private ArrayAdapter<Library.BookInfo> listAdapter;
     private ArrayAdapter<Library.BookInfo> gridAdapter;
     private final ArrayList<Library.BookInfo> displayed = new ArrayList<Library.BookInfo>();
@@ -101,7 +103,7 @@ public class MainActivity extends Activity {
         }, 1f));
         root.addView(row2.view());
 
-        FrameLayout holder = new FrameLayout(this);
+        holder = new FrameLayout(this);
         holder.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         list = new ListView(this);
@@ -115,16 +117,15 @@ public class MainActivity extends Activity {
         holder.addView(list);
         holder.addView(grid);
 
-        TextView empty = Ui.label(this,
+        emptyView = Ui.label(this,
                 "No books match. Add EPUBs or clear your search.", 14, Ui.faint(this), false);
-        empty.setGravity(Gravity.CENTER);
+        emptyView.setGravity(Gravity.CENTER);
         FrameLayout.LayoutParams elp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.CENTER);
-        empty.setLayoutParams(elp);
-        holder.addView(empty);
-        list.setEmptyView(empty);
-        grid.setEmptyView(empty);
+        emptyView.setLayoutParams(elp);
+        list.setEmptyView(emptyView);
+        grid.setEmptyView(emptyView);
         root.addView(holder);
 
         setContentView(root);
@@ -211,9 +212,14 @@ public class MainActivity extends Activity {
     }
 
     private void switchViews() {
+        // AdapterView forces itself VISIBLE whenever its data changes, so merely
+        // setting GONE is not enough. Detach the inactive adapter view instead.
         boolean asGrid = viewMode == Ui.MODE_GRID;
-        grid.setVisibility(asGrid ? View.VISIBLE : View.GONE);
-        list.setVisibility(asGrid ? View.GONE : View.VISIBLE);
+        holder.removeAllViews();
+        holder.addView(asGrid ? grid : list);
+        holder.addView(emptyView);
+        list.setEmptyView(emptyView);
+        grid.setEmptyView(emptyView);
     }
 
     private void chooseView() {
