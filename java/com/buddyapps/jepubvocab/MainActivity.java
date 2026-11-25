@@ -76,7 +76,7 @@ public class MainActivity extends Activity {
         root.addView(info);
 
         search = new EditText(this);
-        search.setHint("Search title, file or word");
+        search.setHint("Search title or file");
         search.setTextSize(14);
         search.setSingleLine(true);
         root.addView(search);
@@ -282,26 +282,18 @@ public class MainActivity extends Activity {
         return out.toString();
     }
 
-    private boolean hasText(Library.BookInfo book, String q) {
-        if (normalize(book.title).contains(q)) return true;
-        if (normalize(book.fileName).contains(q)) return true;
-        for (String word : book.vocabMap.keySet()) {
-            if (normalize(word).contains(q)) return true;
-        }
-        return false;
-    }
-
     private boolean matches(Library.BookInfo book, String query) {
         String q = normalize(query);
         if (q.isEmpty()) return true;
-        if (hasText(book, q)) return true;
+        String title = normalize(book.title);
+        String file = normalize(book.fileName);
+        if (title.contains(q) || file.contains(q)) return true;
         // "くま ベアー" should find a title with other words in between.
         String[] tokens = query.trim().split("\\s+");
         if (tokens.length < 2) return false;
         for (String token : tokens) {
             String t = normalize(token);
-            if (!normalize(book.title).contains(t)
-                    && !normalize(book.fileName).contains(t)) return false;
+            if (!title.contains(t) && !file.contains(t)) return false;
         }
         return true;
     }
