@@ -22,6 +22,7 @@ public class PageActivity extends Activity {
         bookIndex = getIntent().getIntExtra("book", -1);
         pageIndex = getIntent().getIntExtra("page", -1);
         if (bookIndex < 0 || bookIndex >= Library.books.size()) { finish(); return; }
+        Library.ensureBookLoaded(this, bookIndex);
         final Library.BookInfo book = Library.books.get(bookIndex);
         if (pageIndex < 0 || pageIndex >= book.pages.size()) { finish(); return; }
         final Library.PageInfo page = book.pages.get(pageIndex);
@@ -85,7 +86,7 @@ public class PageActivity extends Activity {
             @Override public void run() {
                 final List<Library.SimilarInfo> similar;
                 try {
-                    similar = Library.similarToPage(page, book);
+                    similar = Library.similarToPage(PageActivity.this, page, book);
                 } catch (Throwable e) {
                     runOnUiThread(new Runnable() {
                         @Override public void run() {

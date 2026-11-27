@@ -17,6 +17,7 @@ public class ReaderActivity extends Activity {
         super.onCreate(savedInstanceState);
         bookIndex = getIntent().getIntExtra("book", -1);
         if (bookIndex < 0 || bookIndex >= Library.books.size()) { finish(); return; }
+        Library.ensureBookLoaded(this, bookIndex);
         final Library.BookInfo book = Library.books.get(bookIndex);
         setTitle(book.title + " · pages");
 

@@ -51,19 +51,18 @@ public final class Library {
     private static final long serialVersionUID = 1L;
 
     private static StorageDb db;
-    private static HashMap<String, Integer> df = new HashMap<String, Integer>();
-    private static HashMap<String, Integer> wordDf = new HashMap<String, Integer>();
-    private static double[] bookWordNorm = new double[0];
-    private static double[] bookGramNorm = new double[0];
-    private static List<Map<String, Integer>> bookSimVocab = new ArrayList<Map<String, Integer>>();
+    // Only the small metadata rows are in memory at launch. Full books and
+    // similarity profiles are read from SQLite when a screen actually needs them.
     private static final HashMap<Integer, List<SimilarInfo>> bookSimilarCache =
             new HashMap<Integer, List<SimilarInfo>>();
+    private static ArrayList<BookProfile> profiles;
+    private static HashMap<String, Integer> profileWordDf;
+    private static HashMap<String, Integer> profileGramDf;
+    private static double[] profileWordNorm = new double[0];
+    private static double[] profileGramNorm = new double[0];
+    private static boolean profilesReady;
     private static int totalVocabCount = -1;
     private static ArrayList<VocabEntry> allVocab;
-    // Pairwise scores and each book's strongest neighbours. Built lazily so
-    // opening a book does not scan the whole library on the UI thread.
-    private static volatile double[][] similarityMatrix;
-    private static int[][] similarTopK;
     private static final int SIMILAR_TOP_K = 12;
 
     private Library() { }
@@ -77,26 +76,33 @@ public final class Library {
         allVocab = null;
         totalVocabCount = -1;
         bookSimilarCache.clear();
-        similarityMatrix = null;
-        similarTopK = null;
-        df.clear();
-        wordDf.clear();
-        bookSimVocab.clear();
+        profiles = null;
+        profileWordDf = null;
+        profileGramDf = null;
+        profileWordNorm = new double[0];
+        profileGramNorm = new double[0];
+        profilesReady = false;
     }
 
-    /** Loads the already parsed library from SQLite; no EPUB is opened at launch. */
+    /**
+     * Loads only metadata at launch. Dictionaries, page text and similarity
+     * profiles are deferred until a screen or an import actually needs them.
+     */
     public static void load(Context c) {
-        JMDict.load(c);
-        JMNedict.load(c);
         ensureDb(c);
         books.clear();
-        ArrayList<BookInfo> stored = db.loadBooks();
+        ArrayList<BookInfo> stored = db.loadMeta();
         if (!stored.isEmpty()) {
             books.addAll(stored);
             if (!packed(c)) {
                 // One-time repack: early v1.35 rows were saved without string
                 // canonicalisation and used far more space than necessary.
-                db.saveBooks(books);
+                ArrayList<BookInfo> full = new ArrayList<BookInfo>(stored.size());
+                for (BookInfo m : stored) {
+                    BookInfo b = db.loadBook(m.fileName);
+                    if (b != null) full.add(b);
+                }
+                if (!full.isEmpty()) db.saveBooks(full);
                 markPacked(c);
             }
         } else if (!migrated(c) || (!cleared(c) && hasCopiedEpubs(c))) {
@@ -107,6 +113,13 @@ public final class Library {
             markNotCleared(c);
         }
         prepare();
+    }
+
+    /** Parsing and similarity need the offline dictionaries; launch does not. */
+    private static void ensureDictionaries(Context c) {
+        JMDict.load(c);
+        JMNedict.load(c);
+        JitenRank.load(c);
     }
 
     private static File migrationMarker(Context c) {
@@ -181,6 +194,7 @@ public final class Library {
 
     /** Moves an existing v1.34 library into SQLite once, then retires library.bin. */
     private static void migrateLegacy(Context c) {
+        ensureDictionaries(c);
         File cache = new File(c.getFilesDir(), "library.bin");
         if (cache.exists() && legacyVersionOk(c)) {
             try {
@@ -250,6 +264,7 @@ public final class Library {
      */
     public static synchronized int importUris(Context c, List<Uri> uris) {
         ensureDb(c);
+        ensureDictionaries(c);
         HashSet<String> known = new HashSet<String>();
         for (BookInfo b : books) known.add(b.fileName);
         int added = 0;
@@ -264,6 +279,8 @@ public final class Library {
                 if (!streamToFile(c, uri, tmp)) continue;
                 BookInfo book = parseEpub(tmp, name, System.currentTimeMillis());
                 if (book != null) {
+                    db.clearProfiles();
+                    db.insertBook(book);
                     books.add(book);
                     known.add(name);
                     added++;
@@ -277,7 +294,6 @@ public final class Library {
         if (added > 0) {
             clearCaches();
             prepare();
-            db.saveBooks(books);
             markMigrated(c);
             markPacked(c);
             markNotCleared(c);
@@ -326,21 +342,41 @@ public final class Library {
         }
     }
 
-    /** Reloads the stored library and recomputes derived indexes. */
+    /** Reloads only the lightweight metadata rows from SQLite. */
     public static void rebuild(Context c) {
-        JMDict.load(c);
-        JMNedict.load(c);
         ensureDb(c);
         clearCaches();
         books.clear();
-        books.addAll(db.loadBooks());
+        books.addAll(db.loadMeta());
         prepare();
+    }
+
+    /** Loads the full parsed body for one book the first time it is opened. */
+    public static synchronized BookInfo ensureBookLoaded(Context c, int index) {
+        if (index < 0 || index >= books.size()) return null;
+        ensureDb(c);
+        BookInfo meta = books.get(index);
+        if (meta.loaded) return meta;
+        BookInfo full = db.loadBook(meta.fileName);
+        if (full == null) return meta;
+        full.index = index;
+        full.loaded = true;
+        if (full.pageCount <= 0) full.pageCount = meta.pageCount > 0
+                ? meta.pageCount : full.pages.size();
+        if (full.vocabCount <= 0) full.vocabCount = meta.vocabCount > 0
+                ? meta.vocabCount : full.vocab.size();
+        if ((full.cover == null || full.cover.length == 0) && meta.cover != null) {
+            full.cover = meta.cover;
+        }
+        books.set(index, full);
+        return full;
     }
 
     public static void deleteBook(Context c, BookInfo book) {
         ensureDb(c);
         books.remove(book);
         db.delete(book.fileName);
+        db.clearProfiles();
         File f = new File(booksDir(c), book.fileName);
         if (f.exists()) f.delete();
         if (books.isEmpty()) markCleared(c); else markNotCleared(c);
@@ -353,6 +389,7 @@ public final class Library {
         ensureDb(c);
         books.remove(book);
         db.delete(book.fileName);
+        db.clearProfiles();
         if (books.isEmpty()) markCleared(c); else markNotCleared(c);
         clearCaches();
         prepare();
@@ -410,20 +447,38 @@ public final class Library {
         return c.getDatabasePath("mokuroku.db").length();
     }
 
-    /** Unique word count; prepared once per library change, not per screen refresh. */
+    /** Unique word count from metadata; no book bodies are loaded for this. */
     public static int totalVocab() {
         return totalVocabCount < 0 ? 0 : totalVocabCount;
     }
 
+    /** Builds the tiny row used by the Library list and by sorting. */
+    static BookMeta metaFor(BookInfo book) {
+        BookMeta m = new BookMeta();
+        m.title = book.title;
+        m.author = book.author;
+        m.fileName = book.fileName;
+        m.addedAt = book.addedAt;
+        m.charCount = book.charCount;
+        m.dialoguePercent = book.dialoguePercent;
+        m.avgSentenceLength = book.avgSentenceLength;
+        m.cover = book.cover;
+        m.pageCount = book.pageCount > 0 ? book.pageCount : book.pages.size();
+        m.vocabCount = book.vocabCount > 0 ? book.vocabCount : book.vocab.size();
+        return m;
+    }
+
     /**
-     * Vocabulary merged across every book, sorted by total frequency. Built
-     * lazily (it is large) and cached until the library changes.
+     * Vocabulary merged across every book. Each body is read once, on the
+     * caller's background thread, and then kept in memory until reload.
      */
-    public static synchronized ArrayList<VocabEntry> allVocabulary() {
+    public static synchronized ArrayList<VocabEntry> allVocabulary(Context c) {
         if (allVocab != null) return allVocab;
+        ensureDb(c);
         HashMap<String, Integer> counts = new HashMap<String, Integer>();
         HashMap<String, String> snippets = new HashMap<String, String>();
-        for (BookInfo b : books) {
+        for (int i = 0; i < books.size(); i++) {
+            BookInfo b = ensureBookLoaded(c, i);
             for (VocabEntry v : b.vocab) {
                 Integer old = counts.get(v.word);
                 counts.put(v.word, old == null ? v.count : old + v.count);
@@ -455,7 +510,11 @@ public final class Library {
      * map and reuses the existing VocabEntry objects, so no second vocabulary
      * model is kept in memory after the caller drops the returned list.
      */
-    public static ArrayList<VocabEntry> chronologicalVocab(final BookInfo book) {
+    public static ArrayList<VocabEntry> chronologicalVocab(Context c, BookInfo book) {
+        ensureDictionaries(c);
+        BookInfo full = ensureBookLoaded(c, book.index);
+        if (full == null) return new ArrayList<VocabEntry>();
+        book = full;
         final HashMap<String, Integer> order = new HashMap<String, Integer>();
         int seq = 0;
         for (PageInfo page : book.pages) {
@@ -483,47 +542,22 @@ public final class Library {
         return out;
     }
 
-    /** Recomputes inverse document frequencies and book indexes. */
+    /** Reindexes the lightweight list; no dictionaries or bodies are touched. */
     private static void prepare() {
-        df = new HashMap<String, Integer>();
-        wordDf = new HashMap<String, Integer>();
-        HashSet<String> rawVocabSet = new HashSet<String>();
-        HashMap<String, String> lemmaCache = new HashMap<String, String>();
-        bookSimVocab = new ArrayList<Map<String, Integer>>(books.size());
-        for (int i = 0; i < books.size(); i++) {
-            BookInfo b = books.get(i);
-            b.index = i;
-            Map<String, Integer> simVocab = toSimilarityVocab(b.vocabMap, lemmaCache);
-            bookSimVocab.add(simVocab);
-            for (String g : b.grams.keySet()) {
-                Integer old = df.get(g);
-                df.put(g, old == null ? 1 : old + 1);
-            }
-            for (String w : simVocab.keySet()) {
-                Integer old = wordDf.get(w);
-                wordDf.put(w, old == null ? 1 : old + 1);
-            }
-            rawVocabSet.addAll(b.vocabMap.keySet());
-        }
-        bookWordNorm = new double[books.size()];
-        bookGramNorm = new double[books.size()];
-        for (int i = 0; i < books.size(); i++) {
-            BookInfo b = books.get(i);
-            for (Map.Entry<String, Integer> e : bookSimVocab.get(i).entrySet()) {
-                double w = wordWeight(e.getKey(), e.getValue());
-                bookWordNorm[i] += w * w;
-            }
-            for (Map.Entry<String, Integer> e : b.grams.entrySet()) {
-                double w = weight(e.getKey(), e.getValue());
-                bookGramNorm[i] += w * w;
-            }
-        }
-        // Book indexes can change when books are added or removed.
         Ui.clearCovers();
         bookSimilarCache.clear();
-        similarityMatrix = null;
-        similarTopK = null;
-        totalVocabCount = rawVocabSet.size();
+        profiles = null;
+        profileWordDf = null;
+        profileGramDf = null;
+        profileWordNorm = new double[0];
+        profileGramNorm = new double[0];
+        profilesReady = false;
+        int total = 0;
+        for (int i = 0; i < books.size(); i++) {
+            books.get(i).index = i;
+            total += books.get(i).vocabCount;
+        }
+        totalVocabCount = total;
         allVocab = null;
     }
 
@@ -552,15 +586,20 @@ public final class Library {
         return count <= 0 ? 0.0 : 1.0 + Math.log(count);
     }
 
+    private static void increment(Map<String, Integer> counts, String key) {
+        Integer old = counts.get(key);
+        counts.put(key, old == null ? 1 : old + 1);
+    }
+
     private static double weight(String gram, int count) {
-        Integer d = df.get(gram);
+        Integer d = profileGramDf == null ? null : profileGramDf.get(gram);
         int docFreq = d == null ? 0 : d;
         double idf = Math.log((books.size() + 1.0) / (docFreq + 1.0)) + 1.0;
         return tf(count) * idf;
     }
 
     private static double wordWeight(String word, int count) {
-        Integer d = wordDf.get(word);
+        Integer d = profileWordDf == null ? null : profileWordDf.get(word);
         int docFreq = d == null ? 0 : d;
         double idf = Math.log((books.size() + 1.0) / (docFreq + 1.0)) + 1.0;
         return tf(count) * idf * JitenRank.weight(word);
@@ -581,11 +620,10 @@ public final class Library {
      */
     private static double matchScore(Map<String, Integer> vocabA,
                                      Map<String, Integer> gramsA,
-                                     BookInfo other) {
-        if (books.size() < 2) return 0.0;
-        int i = other.index;
-        Map<String, Integer> otherVocab = i < bookSimVocab.size()
-                ? bookSimVocab.get(i) : other.vocabMap;
+                                     int otherIndex) {
+        if (books.size() < 2 || profiles == null || otherIndex >= profiles.size()) return 0.0;
+        BookProfile other = profiles.get(otherIndex);
+        Map<String, Integer> otherVocab = other.simVocab;
         double wordDot = 0.0;
         double wordNorm = 0.0;
         int shared = 0;
@@ -598,7 +636,7 @@ public final class Library {
                 shared++;
             }
         }
-        double wordCos = cosine(wordDot, wordNorm, bookWordNorm[i]);
+        double wordCos = cosine(wordDot, wordNorm, profileWordNorm[otherIndex]);
         if (shared < 3) wordCos *= shared / 3.0;
         double gramDot = 0.0;
         double gramNorm = 0.0;
@@ -608,32 +646,90 @@ public final class Library {
             Integer count = other.grams.get(e.getKey());
             if (count != null) gramDot += w * weight(e.getKey(), count);
         }
-        return 0.7 * wordCos + 0.3 * cosine(gramDot, gramNorm, bookGramNorm[i]);
+        return 0.7 * wordCos + 0.3 * cosine(gramDot, gramNorm, profileGramNorm[otherIndex]);
+    }
+
+    private static synchronized void ensureProfiles(Context c) {
+        ensureDb(c);
+        if (profilesReady && profiles != null && profiles.size() == books.size()) return;
+        ArrayList<BookProfile> stored = db.loadProfiles();
+        boolean complete = stored.size() == books.size();
+        for (int i = 0; complete && i < stored.size(); i++) {
+            if (stored.get(i) == null) complete = false;
+        }
+        if (complete) {
+            ensureDictionaries(c);
+            profiles = stored;
+            prepareProfileStats();
+            profilesReady = true;
+            return;
+        }
+        rebuildProfiles(c);
+    }
+
+    private static void prepareProfileStats() {
+        profileWordDf = new HashMap<String, Integer>();
+        profileGramDf = new HashMap<String, Integer>();
+        int n = profiles == null ? 0 : profiles.size();
+        for (int i = 0; i < n; i++) {
+            BookProfile p = profiles.get(i);
+            if (p == null) continue;
+            for (String g : p.grams.keySet()) increment(profileGramDf, g);
+            for (String w : p.simVocab.keySet()) increment(profileWordDf, w);
+        }
+        profileWordNorm = new double[n];
+        profileGramNorm = new double[n];
+        for (int i = 0; i < n; i++) {
+            BookProfile p = profiles.get(i);
+            if (p == null) continue;
+            for (Map.Entry<String, Integer> e : p.simVocab.entrySet()) {
+                double w = wordWeight(e.getKey(), e.getValue());
+                profileWordNorm[i] += w * w;
+            }
+            for (Map.Entry<String, Integer> e : p.grams.entrySet()) {
+                double w = weight(e.getKey(), e.getValue());
+                profileGramNorm[i] += w * w;
+            }
+        }
     }
 
     /**
-     * Computes every pair once. The score itself is symmetric, so a book that
-     * appears in another's shortlist can always appear back in its own.
+     * Builds every book's fingerprint and similarity shortlist once, after an
+     * import or deletion. This is the expensive pass that no longer runs at
+     * launch; it is triggered on a background thread when similarity is used.
      */
-    private static synchronized void ensureSimilarityMatrix() {
+    private static synchronized void rebuildProfiles(Context c) {
+        ensureDb(c);
+        ensureDictionaries(c);
+        HashMap<String, String> lemmaCache = new HashMap<String, String>();
+        ArrayList<BookProfile> built = new ArrayList<BookProfile>(books.size());
+        for (int i = 0; i < books.size(); i++) {
+            BookInfo full = db.loadBook(books.get(i).fileName);
+            BookProfile p = new BookProfile();
+            if (full != null) {
+                p.simVocab = toSimilarityVocab(full.vocabMap, lemmaCache);
+                if (full.grams != null) p.grams = full.grams;
+            }
+            built.add(p);
+        }
+        profiles = built;
+        prepareProfileStats();
+
         int n = books.size();
-        if (similarityMatrix != null && similarityMatrix.length == n) return;
-        double[][] m = new double[n][n];
+        double[][] matrix = new double[n][n];
         for (int i = 0; i < n; i++) {
-            BookInfo a = books.get(i);
-            Map<String, Integer> simA = i < bookSimVocab.size()
-                    ? bookSimVocab.get(i) : a.vocabMap;
+            BookProfile a = profiles.get(i);
             for (int j = i + 1; j < n; j++) {
-                double score = matchScore(simA, a.grams, books.get(j));
-                m[i][j] = score;
-                m[j][i] = score;
+                double score = matchScore(a.simVocab, a.grams, j);
+                matrix[i][j] = score;
+                matrix[j][i] = score;
             }
         }
         int[][] top = new int[n][];
         for (int i = 0; i < n; i++) {
             ArrayList<SimilarInfo> row = new ArrayList<SimilarInfo>(n);
             for (int j = 0; j < n; j++) {
-                if (j != i) row.add(new SimilarInfo(j, m[i][j], null));
+                if (j != i) row.add(new SimilarInfo(j, matrix[i][j], null));
             }
             Collections.sort(row);
             int k = Math.min(SIMILAR_TOP_K, row.size());
@@ -641,57 +737,57 @@ public final class Library {
             for (int t = 0; t < k; t++) best[t] = row.get(t).bookIndex;
             top[i] = best;
         }
-        similarTopK = top;
-        similarityMatrix = m;
+        for (int i = 0; i < n; i++) {
+            // Union of this book's strongest matches and every book that lists
+            // this one, so similar lists are reciprocal instead of one-way.
+            LinkedHashSet<Integer> candidates = new LinkedHashSet<Integer>();
+            for (int j : top[i]) candidates.add(j);
+            for (int j = 0; j < n; j++) {
+                if (j == i) continue;
+                for (int k : top[j]) {
+                    if (k == i) { candidates.add(j); break; }
+                }
+            }
+            ArrayList<SimilarInfo> out = new ArrayList<SimilarInfo>(candidates.size());
+            for (int j : candidates) out.add(new SimilarInfo(j, matrix[i][j], null));
+            Collections.sort(out);
+            for (SimilarInfo s : out) {
+                s.shared = sharedWords(profiles.get(i).simVocab,
+                        profiles.get(s.bookIndex).simVocab);
+            }
+            profiles.get(i).similar = out;
+        }
+        db.saveProfiles(books, profiles);
+        profilesReady = true;
+        bookSimilarCache.clear();
     }
 
-    public static synchronized List<SimilarInfo> similarToBook(BookInfo source) {
+    public static synchronized List<SimilarInfo> similarToBook(Context c, BookInfo source) {
+        ensureProfiles(c);
         List<SimilarInfo> cached = bookSimilarCache.get(source.index);
         if (cached != null) return cached;
-        ensureSimilarityMatrix();
-        double[][] matrix = similarityMatrix;
-        int[][] top = similarTopK;
-        int n = books.size();
-        // Union of this book's strongest matches and every book that lists this
-        // one, so similar lists are reciprocal instead of one-directional.
-        LinkedHashSet<Integer> candidates = new LinkedHashSet<Integer>();
-        for (int j : top[source.index]) candidates.add(j);
-        for (int i = 0; i < n; i++) {
-            if (i == source.index) continue;
-            for (int j : top[i]) {
-                if (j == source.index) { candidates.add(i); break; }
-            }
-        }
-        Map<String, Integer> srcSim = source.index < bookSimVocab.size()
-                ? bookSimVocab.get(source.index) : source.vocabMap;
-        ArrayList<SimilarInfo> out = new ArrayList<SimilarInfo>(candidates.size());
-        for (int j : candidates) {
-            out.add(new SimilarInfo(j, matrix[source.index][j], null));
-        }
-        Collections.sort(out);
-        for (SimilarInfo s : out) {
-            Map<String, Integer> otherSim = s.bookIndex < bookSimVocab.size()
-                    ? bookSimVocab.get(s.bookIndex) : books.get(s.bookIndex).vocabMap;
-            s.shared = sharedWords(srcSim, otherSim);
-        }
+        BookProfile p = profiles.get(source.index);
+        List<SimilarInfo> out = p.similar == null
+                ? new ArrayList<SimilarInfo>() : p.similar;
         bookSimilarCache.put(source.index, out);
         return out;
     }
 
-    public static List<SimilarInfo> similarToPage(PageInfo page, BookInfo source) {
+    public static synchronized List<SimilarInfo> similarToPage(Context c, PageInfo page,
+                                                              BookInfo source) {
+        ensureProfiles(c);
+        ensureDictionaries(c);
         Map<String, Integer> pageSim = toSimilarityVocab(page.vocab, null);
         ArrayList<SimilarInfo> out = new ArrayList<SimilarInfo>();
-        for (BookInfo other : books) {
-            if (other.index == source.index) continue;
-            double score = matchScore(pageSim, page.grams, other);
-            out.add(new SimilarInfo(other.index, score, null));
+        for (int i = 0; i < books.size(); i++) {
+            if (i == source.index) continue;
+            double score = matchScore(pageSim, page.grams, i);
+            out.add(new SimilarInfo(i, score, null));
         }
         Collections.sort(out);
         if (out.size() > 5) out = new ArrayList<SimilarInfo>(out.subList(0, 5));
         for (SimilarInfo s : out) {
-            Map<String, Integer> otherSim = s.bookIndex < bookSimVocab.size()
-                    ? bookSimVocab.get(s.bookIndex) : books.get(s.bookIndex).vocabMap;
-            s.shared = sharedWords(pageSim, otherSim);
+            s.shared = sharedWords(pageSim, profiles.get(s.bookIndex).simVocab);
         }
         return out;
     }
@@ -1547,6 +1643,11 @@ public final class Library {
         public double dialoguePercent;
         public double avgSentenceLength;
         public byte[] cover;
+        // Counts are kept in the metadata row so sorting and cards stay cheap.
+        public int pageCount;
+        public int vocabCount;
+        // The body is read from SQLite only when a book is opened.
+        public transient boolean loaded;
         public ArrayList<PageInfo> pages = new ArrayList<PageInfo>();
         public ArrayList<VocabEntry> vocab = new ArrayList<VocabEntry>();
         public HashMap<String, Integer> vocabMap = new HashMap<String, Integer>();
@@ -1554,11 +1655,52 @@ public final class Library {
         public HashMap<String, Integer> grams = new HashMap<String, Integer>();
 
         public String summary() {
-            return Ui.num(pages.size()) + " pages  ·  " + Ui.num(charCount)
-                    + " chars  ·  " + Ui.num(vocab.size()) + " words  ·  "
+            int pages = pageCount > 0 ? pageCount : this.pages.size();
+            int words = vocabCount > 0 ? vocabCount : vocab.size();
+            return Ui.num(pages) + " pages  ·  " + Ui.num(charCount)
+                    + " chars  ·  " + Ui.num(words) + " words  ·  "
                     + Math.round(dialoguePercent) + "% dialogue  ·  "
                     + Ui.dec(avgSentenceLength) + " chars/sent";
         }
+    }
+
+    /** Small serializable row used for the Library list; no page data. */
+    static class BookMeta implements Serializable {
+        private static final long serialVersionUID = 1L;
+        String title;
+        String author;
+        String fileName;
+        long addedAt;
+        long charCount;
+        double dialoguePercent;
+        double avgSentenceLength;
+        byte[] cover;
+        int pageCount;
+        int vocabCount;
+
+        BookInfo toBook() {
+            BookInfo b = new BookInfo();
+            b.title = title == null ? "" : title;
+            b.author = author == null ? "" : author;
+            b.fileName = fileName == null ? "" : fileName;
+            b.addedAt = addedAt;
+            b.charCount = charCount;
+            b.dialoguePercent = dialoguePercent;
+            b.avgSentenceLength = avgSentenceLength;
+            b.cover = cover;
+            b.pageCount = pageCount;
+            b.vocabCount = vocabCount;
+            b.loaded = false;
+            return b;
+        }
+    }
+
+    /** Cached similarity data: compact fingerprints plus each book's shortlist. */
+    static class BookProfile implements Serializable {
+        private static final long serialVersionUID = 1L;
+        HashMap<String, Integer> simVocab = new HashMap<String, Integer>();
+        HashMap<String, Integer> grams = new HashMap<String, Integer>();
+        ArrayList<SimilarInfo> similar = new ArrayList<SimilarInfo>();
     }
 
     public static class PageInfo implements Serializable {

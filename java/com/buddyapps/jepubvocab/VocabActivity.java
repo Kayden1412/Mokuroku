@@ -43,6 +43,7 @@ public class VocabActivity extends Activity {
 
         int bookIndex = getIntent().getIntExtra("book", -1);
         oneBook = bookIndex >= 0 && bookIndex < Library.books.size();
+        if (oneBook) Library.ensureBookLoaded(this, bookIndex);
         book = oneBook ? Library.books.get(bookIndex) : null;
         sortMode = getSharedPreferences("mokuroku", MODE_PRIVATE)
                 .getInt("vocabSort", SORT_BOOK_FREQ);
@@ -127,7 +128,7 @@ public class VocabActivity extends Activity {
                 @Override public void run() {
                     final List<Library.VocabEntry> all;
                     try {
-                        all = Library.allVocabulary();
+                        all = Library.allVocabulary(VocabActivity.this);
                     } catch (Throwable e) {
                         return;
                     }
@@ -151,7 +152,7 @@ public class VocabActivity extends Activity {
                 new Thread(new Runnable() {
                     @Override public void run() {
                         final ArrayList<Library.VocabEntry> result =
-                                Library.chronologicalVocab(book);
+                                Library.chronologicalVocab(VocabActivity.this, book);
                         runOnUiThread(new Runnable() {
                             @Override public void run() {
                                 if (isFinishing() || generation != sortGeneration) return;
@@ -167,6 +168,7 @@ public class VocabActivity extends Activity {
             return;
         }
         final int mode = sortMode;
+        if (mode == SORT_JITEN_FREQ) JitenRank.load(this);
         Collections.sort(entries, new Comparator<Library.VocabEntry>() {
             @Override public int compare(Library.VocabEntry a, Library.VocabEntry b) {
                 if (mode == SORT_JITEN_FREQ) {

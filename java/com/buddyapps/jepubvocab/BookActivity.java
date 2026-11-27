@@ -36,6 +36,7 @@ public class BookActivity extends Activity {
         super.onCreate(savedInstanceState);
         bookIndex = getIntent().getIntExtra("book", -1);
         if (!valid()) { finish(); return; }
+        Library.ensureBookLoaded(this, bookIndex);
         minMatch = getSharedPreferences("mokuroku", MODE_PRIVATE)
                 .getInt("min_match", 0);
         excludeSameAuthor = getSharedPreferences("mokuroku", MODE_PRIVATE)
@@ -165,7 +166,7 @@ public class BookActivity extends Activity {
             @Override public void run() {
                 final List<Library.SimilarInfo> found;
                 try {
-                    found = Library.similarToBook(source);
+                    found = Library.similarToBook(BookActivity.this, source);
                 } catch (Throwable e) {
                     runOnUiThread(new Runnable() {
                         @Override public void run() {

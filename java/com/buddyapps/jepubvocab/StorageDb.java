@@ -17,20 +17,24 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * SQLite store for parsed books. The extracted text, vocabulary, word profiles
- * and resized cover are stored here, so the original EPUB is never needed again
- * and nothing has to be reparsed at launch.
+ * SQLite store for parsed books. Three kinds of rows are kept apart:
  *
- * Each book is split into 256 KB chunks: Android's CursorWindow rejects single
- * rows larger than about 2 MB, which a whole book regularly exceeds.
+ * <ul>
+ * <li>{@code books}: small metadata rows (title, stats, cover, sizes);</li>
+ * <li>{@code chunks}: the full parsed book, split into 256 KB pieces because
+ * Android's CursorWindow rejects single rows larger than about 2 MB;</li>
+ * <li>{@code profiles}: precomputed similarity fingerprints and shortlists, so
+ * ordering the library and opening a book never needs the full text.</li>
+ * </ul>
  */
 final class StorageDb extends SQLiteOpenHelper {
 
     private static final String BOOKS = "books";
     private static final String CHUNKS = "chunks";
+    private static final String PROFILES = "profiles";
     private static final String DB_NAME = "mokuroku.db";
     // Bump together with Library.CACHE_VERSION when the stored format changes.
-    private static final int DB_VERSION = 9;
+    private static final int DB_VERSION = 10;
     private static final int CHUNK_BYTES = 256 * 1024;
 
     StorageDb(Context c) {
@@ -38,18 +42,63 @@ final class StorageDb extends SQLiteOpenHelper {
     }
 
     @Override public void onCreate(SQLiteDatabase db) {
+        createBooks(db);
+        createChunks(db);
+        createProfiles(db);
+    }
+
+    private static void createBooks(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE " + BOOKS
-                + " (_id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, size INTEGER)");
+                + " (_id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE,"
+                + " size INTEGER, meta BLOB)");
+    }
+
+    private static void createChunks(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE " + CHUNKS
                 + " (_id INTEGER PRIMARY KEY AUTOINCREMENT, book_id INTEGER, seq INTEGER,"
                 + " data BLOB)");
         db.execSQL("CREATE INDEX chunk_lookup ON " + CHUNKS + " (book_id, seq)");
     }
 
+    private static void createProfiles(SQLiteDatabase db) {
+        db.execSQL("CREATE TABLE " + PROFILES
+                + " (_id INTEGER PRIMARY KEY AUTOINCREMENT, book_id INTEGER UNIQUE,"
+                + " data BLOB)");
+        db.execSQL("CREATE INDEX profile_lookup ON " + PROFILES + " (book_id)");
+    }
+
     @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
-        db.execSQL("DROP TABLE IF EXISTS " + CHUNKS);
-        db.execSQL("DROP TABLE IF EXISTS " + BOOKS);
-        onCreate(db);
+        if (oldVersion >= 10) return;
+        if (oldVersion < 9) {
+            db.execSQL("DROP TABLE IF EXISTS " + CHUNKS);
+            db.execSQL("DROP TABLE IF EXISTS " + BOOKS);
+            db.execSQL("DROP TABLE IF EXISTS " + PROFILES);
+            onCreate(db);
+            return;
+        }
+        // v9 -> v10 keeps every parsed book and derives the new metadata row
+        // from the stored body. One slow upgrade is cheaper than reparsing.
+        db.execSQL("ALTER TABLE " + BOOKS + " ADD COLUMN meta BLOB");
+        createProfiles(db);
+        populateMeta(db);
+    }
+
+    private static void populateMeta(SQLiteDatabase db) {
+        Cursor c = db.query(BOOKS, new String[]{"_id", "name"}, null, null, null, null, "_id");
+        try {
+            while (c.moveToNext()) {
+                long id = c.getLong(0);
+                String name = c.getString(1);
+                Library.BookInfo book = deserialize(readChunks(db, id));
+                if (book == null) continue;
+                if (book.fileName == null || book.fileName.isEmpty()) book.fileName = name;
+                ContentValues cv = new ContentValues();
+                cv.put("meta", serializeMeta(book));
+                db.update(BOOKS, cv, "_id=?", new String[]{String.valueOf(id)});
+            }
+        } finally {
+            c.close();
+        }
     }
 
     private static String canonical(String s, Map<String, String> pool) {
@@ -61,7 +110,7 @@ final class StorageDb extends SQLiteOpenHelper {
     }
 
     private static <V> HashMap<String, V> canonicalKeys(HashMap<String, V> map,
-                                                         Map<String, String> pool) {
+                                                          Map<String, String> pool) {
         HashMap<String, V> out = new HashMap<String, V>(map.size());
         for (Map.Entry<String, V> e : map.entrySet()) {
             out.put(canonical(e.getKey(), pool), e.getValue());
@@ -72,8 +121,8 @@ final class StorageDb extends SQLiteOpenHelper {
     /**
      * Stores only what cannot be derived cheaply: page text, word counts, gram
      * counts and snippet keys. Vocabulary lists, book totals and snippet strings
-     * are rebuilt from the page text on load. Tokens are also canonicalised so
-     * repeated words are written once per book.
+     * are rebuilt from the page text when one book is opened. Tokens are also
+     * canonicalised so repeated words are written once per book.
      */
     private static byte[] serialize(Library.BookInfo book) {
         ArrayList<Library.VocabEntry> bookVocab = book.vocab;
@@ -141,15 +190,26 @@ final class StorageDb extends SQLiteOpenHelper {
         }
     }
 
-    private static Library.BookInfo deserialize(byte[] data) {
+    private static byte[] objectBytes(Object object) {
+        try {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            ObjectOutputStream out = new ObjectOutputStream(bytes);
+            try {
+                out.writeObject(object);
+            } finally {
+                out.close();
+            }
+            return bytes.toByteArray();
+        } catch (Throwable e) {
+            return null;
+        }
+    }
+
+    private static Object readObject(byte[] data) {
         try {
             ObjectInputStream in = new ObjectInputStream(new ByteArrayInputStream(data));
             try {
-                Object o = in.readObject();
-                if (!(o instanceof Library.BookInfo)) return null;
-                Library.BookInfo book = (Library.BookInfo) o;
-                Library.rebuildDerived(book);
-                return book;
+                return in.readObject();
             } finally {
                 in.close();
             }
@@ -158,57 +218,99 @@ final class StorageDb extends SQLiteOpenHelper {
         }
     }
 
-    /** Replaces the stored library in one transaction so a crash cannot leave half of it. */
+    private static byte[] serializeMeta(Library.BookInfo book) {
+        return objectBytes(Library.metaFor(book));
+    }
+
+    private static Library.BookInfo deserializeMeta(byte[] data) {
+        Object o = readObject(data);
+        return o instanceof Library.BookMeta ? ((Library.BookMeta) o).toBook() : null;
+    }
+
+    private static byte[] serializeProfile(Library.BookProfile profile) {
+        return objectBytes(profile);
+    }
+
+    private static Library.BookProfile deserializeProfile(byte[] data) {
+        Object o = readObject(data);
+        return o instanceof Library.BookProfile ? (Library.BookProfile) o : null;
+    }
+
+    private static Library.BookInfo deserialize(byte[] data) {
+        if (data == null || data.length == 0) return null;
+        Object o = readObject(data);
+        if (!(o instanceof Library.BookInfo)) return null;
+        Library.BookInfo book = (Library.BookInfo) o;
+        Library.rebuildDerived(book);
+        book.loaded = true;
+        if (book.pageCount <= 0) book.pageCount = book.pages.size();
+        if (book.vocabCount <= 0) book.vocabCount = book.vocab.size();
+        return book;
+    }
+
+    /** Replaces the stored library in one transaction (used for full restores). */
     synchronized void saveBooks(List<Library.BookInfo> books) {
         SQLiteDatabase db = getWritableDatabase();
         db.beginTransaction();
         try {
+            db.delete(PROFILES, null, null);
             db.delete(CHUNKS, null, null);
             db.delete(BOOKS, null, null);
-            for (Library.BookInfo book : books) {
-                byte[] data = serialize(book);
-                if (data == null) continue;
-                ContentValues cv = new ContentValues();
-                cv.put("name", book.fileName);
-                cv.put("size", data.length);
-                long id = db.insert(BOOKS, null, cv);
-                if (id < 0) continue;
-                int seq = 0;
-                for (int off = 0; off < data.length; off += CHUNK_BYTES) {
-                    int end = Math.min(data.length, off + CHUNK_BYTES);
-                    ContentValues chunk = new ContentValues();
-                    chunk.put("book_id", id);
-                    chunk.put("seq", seq++);
-                    chunk.put("data", Arrays.copyOfRange(data, off, end));
-                    db.insert(CHUNKS, null, chunk);
-                }
-            }
+            for (Library.BookInfo book : books) insertBookInTx(db, book);
             db.setTransactionSuccessful();
         } finally {
             db.endTransaction();
         }
     }
 
-    synchronized ArrayList<Library.BookInfo> loadBooks() {
+    /** Adds one newly parsed book without touching the other bodies. */
+    synchronized void insertBook(Library.BookInfo book) {
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try {
+            insertBookInTx(db, book);
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+        }
+    }
+
+    private static void insertBookInTx(SQLiteDatabase db, Library.BookInfo book) {
+        byte[] data = serialize(book);
+        byte[] meta = serializeMeta(book);
+        if (data == null || meta == null) return;
+        ContentValues cv = new ContentValues();
+        cv.put("name", book.fileName);
+        cv.put("size", data.length);
+        cv.put("meta", meta);
+        long id = db.insert(BOOKS, null, cv);
+        if (id < 0) return;
+        int seq = 0;
+        for (int off = 0; off < data.length; off += CHUNK_BYTES) {
+            int end = Math.min(data.length, off + CHUNK_BYTES);
+            ContentValues chunk = new ContentValues();
+            chunk.put("book_id", id);
+            chunk.put("seq", seq++);
+            chunk.put("data", Arrays.copyOfRange(data, off, end));
+            db.insert(CHUNKS, null, chunk);
+        }
+    }
+
+    /** Loads only the small metadata row for every book. */
+    synchronized ArrayList<Library.BookInfo> loadMeta() {
         ArrayList<Library.BookInfo> out = new ArrayList<Library.BookInfo>();
         SQLiteDatabase db = getReadableDatabase();
-        Cursor c = db.query(BOOKS, new String[]{"_id", "name"}, null, null, null, null, "_id");
+        Cursor c = db.query(BOOKS, new String[]{"_id", "name", "meta"},
+                null, null, null, null, "_id");
         try {
             while (c.moveToNext()) {
                 long id = c.getLong(0);
                 String name = c.getString(1);
-                ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-                Cursor cc = db.query(CHUNKS, new String[]{"data"}, "book_id=?",
-                        new String[]{String.valueOf(id)}, null, null, "seq");
-                try {
-                    while (cc.moveToNext()) {
-                        byte[] part = cc.getBlob(0);
-                        if (part != null) bytes.write(part, 0, part.length);
-                    }
-                } finally {
-                    cc.close();
+                Library.BookInfo book = c.isNull(2) ? null : deserializeMeta(c.getBlob(2));
+                if (book == null) {
+                    Library.BookInfo full = deserialize(readChunks(db, id));
+                    if (full != null) book = Library.metaFor(full).toBook();
                 }
-                Library.BookInfo book = deserialize(bytes.toByteArray());
                 if (book != null) {
                     if (book.fileName == null || book.fileName.isEmpty()) book.fileName = name;
                     out.add(book);
@@ -218,6 +320,99 @@ final class StorageDb extends SQLiteOpenHelper {
             c.close();
         }
         return out;
+    }
+
+    private static byte[] readChunks(SQLiteDatabase db, long id) {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        Cursor cc = db.query(CHUNKS, new String[]{"data"}, "book_id=?",
+                new String[]{String.valueOf(id)}, null, null, "seq");
+        try {
+            while (cc.moveToNext()) {
+                byte[] part = cc.getBlob(0);
+                if (part != null) bytes.write(part, 0, part.length);
+            }
+        } catch (Throwable e) {
+            return null;
+        } finally {
+            cc.close();
+        }
+        return bytes.toByteArray();
+    }
+
+    private static long bookId(SQLiteDatabase db, String name) {
+        Cursor c = db.query(BOOKS, new String[]{"_id"}, "name=?",
+                new String[]{name}, null, null, null);
+        try {
+            return c.moveToFirst() ? c.getLong(0) : -1L;
+        } finally {
+            c.close();
+        }
+    }
+
+    /** Loads one full book body, including its page text and vocabulary. */
+    synchronized Library.BookInfo loadBook(String name) {
+        SQLiteDatabase db = getReadableDatabase();
+        long id = bookId(db, name);
+        if (id < 0) return null;
+        Library.BookInfo book = deserialize(readChunks(db, id));
+        if (book != null && (book.fileName == null || book.fileName.isEmpty())) {
+            book.fileName = name;
+        }
+        return book;
+    }
+
+    /** Loads similarity profiles in the same order as {@link #loadMeta()}. */
+    synchronized ArrayList<Library.BookProfile> loadProfiles() {
+        ArrayList<Library.BookProfile> out = new ArrayList<Library.BookProfile>();
+        SQLiteDatabase db = getReadableDatabase();
+        Cursor c = db.query(BOOKS, new String[]{"_id"}, null, null, null, null, "_id");
+        try {
+            while (c.moveToNext()) {
+                long id = c.getLong(0);
+                Library.BookProfile profile = null;
+                Cursor pc = db.query(PROFILES, new String[]{"data"}, "book_id=?",
+                        new String[]{String.valueOf(id)}, null, null, null);
+                try {
+                    if (pc.moveToFirst() && !pc.isNull(0)) {
+                        profile = deserializeProfile(pc.getBlob(0));
+                    }
+                } finally {
+                    pc.close();
+                }
+                out.add(profile);
+            }
+        } finally {
+            c.close();
+        }
+        return out;
+    }
+
+    synchronized void saveProfiles(List<Library.BookInfo> books,
+                                   List<Library.BookProfile> profiles) {
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try {
+            db.delete(PROFILES, null, null);
+            for (int i = 0; i < books.size(); i++) {
+                long id = bookId(db, books.get(i).fileName);
+                if (id < 0) continue;
+                Library.BookProfile p = i < profiles.size()
+                        ? profiles.get(i) : new Library.BookProfile();
+                byte[] data = serializeProfile(p);
+                if (data == null) continue;
+                ContentValues cv = new ContentValues();
+                cv.put("book_id", id);
+                cv.put("data", data);
+                db.insert(PROFILES, null, cv);
+            }
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+        }
+    }
+
+    synchronized void clearProfiles() {
+        getWritableDatabase().delete(PROFILES, null, null);
     }
 
     synchronized long bytes(String name) {
@@ -253,14 +448,17 @@ final class StorageDb extends SQLiteOpenHelper {
 
     synchronized void delete(String name) {
         SQLiteDatabase db = getWritableDatabase();
-        db.execSQL("DELETE FROM " + CHUNKS + " WHERE book_id IN "
-                + "(SELECT _id FROM " + BOOKS + " WHERE name=?)", new Object[]{name});
+        Object[] args = new Object[]{name};
+        String where = "book_id IN (SELECT _id FROM " + BOOKS + " WHERE name=?)";
+        db.execSQL("DELETE FROM " + CHUNKS + " WHERE " + where, args);
+        db.execSQL("DELETE FROM " + PROFILES + " WHERE " + where, args);
         db.delete(BOOKS, "name=?", new String[]{name});
     }
 
     synchronized void clear() {
         SQLiteDatabase db = getWritableDatabase();
         db.delete(CHUNKS, null, null);
+        db.delete(PROFILES, null, null);
         db.delete(BOOKS, null, null);
     }
 }

@@ -236,6 +236,7 @@ final class Ui {
     }
 
     static void wordDialog(final Activity a, final String word, String snippet) {
+        JMDict.load(a);
         StringBuilder message = new StringBuilder();
         if (snippet != null && !snippet.isEmpty()) message.append(snippet).append("\n\n");
         List<JMDict.Hit> hits = JMDict.lookup(word);
