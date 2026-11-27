@@ -50,39 +50,24 @@ final class JMDict {
         }
     }
 
-    private static Map<String, Entry> byForm;
-    private static volatile TrieNode formTrie;
+    static final class InflectHit {
+        final String lemma;
+        final int steps;
+        final int rank;
 
-    // Compact trie: only branching nodes need a HashMap, so the ~21k surface
-    // forms already embedded in jmdict.txt cost a few hundred KB, not an extra
-    // dictionary download or a bigger APK.
-    private static final class TrieNode {
-        char ch;
-        TrieNode first;
-        HashMap<Character, TrieNode> rest;
-        boolean word;
-
-        TrieNode child(char c) {
-            if (first == null) return null;
-            if (first.ch == c) return first;
-            return rest == null ? null : rest.get(c);
-        }
-
-        void add(TrieNode node) {
-            if (first == null) {
-                first = node;
-            } else {
-                if (rest == null) rest = new HashMap<Character, TrieNode>();
-                rest.put(node.ch, node);
-            }
+        InflectHit(String lemma, int steps, int rank) {
+            this.lemma = lemma;
+            this.steps = steps;
+            this.rank = rank;
         }
     }
+
+    private static Map<String, Entry> byForm;
 
     private JMDict() { }
 
     static synchronized void load(Context c) {
         if (byForm != null) return;
-        formTrie = null;
         HashMap<String, Entry> map = new HashMap<String, Entry>();
         try {
             InputStream in = c.getAssets().open("jmdict.txt");
@@ -110,44 +95,40 @@ final class JMDict {
         return byForm != null && form != null && byForm.containsKey(form);
     }
 
-    private static synchronized void buildTrie() {
-        if (formTrie != null) return;
-        TrieNode root = new TrieNode();
-        for (String form : byForm.keySet()) {
-            if (form == null || form.isEmpty()) continue;
-            TrieNode node = root;
-            for (int i = 0; i < form.length(); i++) {
-                char c = form.charAt(i);
-                TrieNode next = node.child(c);
-                if (next == null) {
-                    next = new TrieNode();
-                    next.ch = c;
-                    node.add(next);
-                }
-                node = next;
-            }
-            node.word = true;
-        }
-        formTrie = root;
+    static boolean isContentWord(String form) {
+        if (byForm == null || form == null) return false;
+        Entry e = byForm.get(form);
+        return e != null && e.contentWord;
+    }
+
+    static Map<String, Entry> formMap() {
+        return byForm;
     }
 
     /**
-     * Longest dictionary form starting at {@code start}. Returns the end index
-     * (exclusive), or -1 when no entry matches. Used by the tokenizer's
-     * longest-match segmentation.
+     * Resolves an inflected surface form to its lowest-cost dictionary base form
+     * (preferring fewer deinflection steps, then higher Jiten frequency), or
+     * returns null when no valid inflected verb/adjective matches.
      */
-    static synchronized int longestForm(String text, int start, int maxLen) {
-        if (byForm == null || text == null) return -1;
-        if (formTrie == null) buildTrie();
-        TrieNode node = formTrie;
-        int limit = Math.min(text.length(), start + maxLen);
-        int end = -1;
-        for (int i = start; i < limit; i++) {
-            node = node.child(text.charAt(i));
-            if (node == null) break;
-            if (node.word) end = i + 1;
-        }
-        return end;
+    static InflectHit bestInflection(String surface) {
+        if (byForm == null || surface == null || surface.length() < 2) return null;
+        final Map<String, Entry> map = byForm;
+        final InflectHit[] best = new InflectHit[1];
+        final double[] bestScore = new double[]{Double.MAX_VALUE};
+        Deinflector.deinflectSteps(surface, new Deinflector.StepVisitor() {
+            @Override public void visit(String candidate, int conditions, int steps) {
+                Entry entry = map.get(candidate);
+                if (entry == null) return;
+                if ((entry.conditions & conditions) == 0) return;
+                int rank = JitenRank.rank(candidate);
+                double score = steps * 2.5 + Math.log(rank + 2.0);
+                if (score < bestScore[0]) {
+                    bestScore[0] = score;
+                    best[0] = new InflectHit(candidate, steps, rank);
+                }
+            }
+        });
+        return best[0];
     }
 
     /**

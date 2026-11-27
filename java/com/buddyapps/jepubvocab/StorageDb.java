@@ -34,11 +34,15 @@ final class StorageDb extends SQLiteOpenHelper {
     private static final String PROFILES = "profiles";
     private static final String DB_NAME = "mokuroku.db";
     // Bump together with Library.CACHE_VERSION when the stored format changes.
-    private static final int DB_VERSION = 10;
+    private static final int DB_VERSION = 11;
     private static final int CHUNK_BYTES = 256 * 1024;
+
+    private final Context appContext;
 
     StorageDb(Context c) {
         super(c, DB_NAME, null, DB_VERSION);
+        Context app = c.getApplicationContext();
+        this.appContext = app != null ? app : c;
     }
 
     @Override public void onCreate(SQLiteDatabase db) {
@@ -68,7 +72,7 @@ final class StorageDb extends SQLiteOpenHelper {
     }
 
     @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
-        if (oldVersion >= 10) return;
+        if (oldVersion >= 11) return;
         if (oldVersion < 9) {
             db.execSQL("DROP TABLE IF EXISTS " + CHUNKS);
             db.execSQL("DROP TABLE IF EXISTS " + BOOKS);
@@ -76,11 +80,52 @@ final class StorageDb extends SQLiteOpenHelper {
             onCreate(db);
             return;
         }
-        // v9 -> v10 keeps every parsed book and derives the new metadata row
-        // from the stored body. One slow upgrade is cheaper than reparsing.
-        db.execSQL("ALTER TABLE " + BOOKS + " ADD COLUMN meta BLOB");
-        createProfiles(db);
-        populateMeta(db);
+        if (oldVersion < 10) {
+            // v9 -> v10 keeps every parsed book and derives the new metadata row
+            // from the stored body. One slow upgrade is cheaper than reparsing.
+            db.execSQL("ALTER TABLE " + BOOKS + " ADD COLUMN meta BLOB");
+            createProfiles(db);
+            populateMeta(db);
+        }
+        if (oldVersion < 11) {
+            retokenizeAll(db);
+        }
+    }
+
+    private void retokenizeAll(SQLiteDatabase db) {
+        Library.ensureDictionaries(appContext);
+        ArrayList<Long> ids = new ArrayList<Long>();
+        ArrayList<String> names = new ArrayList<String>();
+        Cursor c = db.query(BOOKS, new String[]{"_id", "name"}, null, null, null, null, "_id");
+        try {
+            while (c.moveToNext()) {
+                ids.add(c.getLong(0));
+                names.add(c.getString(1));
+            }
+        } finally {
+            c.close();
+        }
+        for (int i = 0; i < ids.size(); i++) {
+            long id = ids.get(i);
+            String name = names.get(i);
+            byte[] raw = readChunks(db, id);
+            if (raw == null || raw.length == 0) continue;
+            Object o = readObject(raw);
+            if (!(o instanceof Library.BookInfo)) continue;
+            Library.BookInfo book = (Library.BookInfo) o;
+            if (book.fileName == null || book.fileName.isEmpty()) book.fileName = name;
+            Library.retokenizeBook(book);
+            byte[] data = serialize(book);
+            byte[] meta = serializeMeta(book);
+            if (data == null || meta == null) continue;
+            db.delete(CHUNKS, "book_id=?", new String[]{String.valueOf(id)});
+            writeChunks(db, id, data);
+            ContentValues cv = new ContentValues();
+            cv.put("size", data.length);
+            cv.put("meta", meta);
+            db.update(BOOKS, cv, "_id=?", new String[]{String.valueOf(id)});
+        }
+        db.delete(PROFILES, null, null);
     }
 
     private static void populateMeta(SQLiteDatabase db) {
@@ -285,6 +330,10 @@ final class StorageDb extends SQLiteOpenHelper {
         cv.put("meta", meta);
         long id = db.insert(BOOKS, null, cv);
         if (id < 0) return;
+        writeChunks(db, id, data);
+    }
+
+    private static void writeChunks(SQLiteDatabase db, long id, byte[] data) {
         int seq = 0;
         for (int off = 0; off < data.length; off += CHUNK_BYTES) {
             int end = Math.min(data.length, off + CHUNK_BYTES);

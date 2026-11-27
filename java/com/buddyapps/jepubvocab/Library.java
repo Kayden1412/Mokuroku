@@ -28,7 +28,6 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
@@ -47,7 +46,7 @@ public final class Library {
     private static final int MAX_GRAMS = 180;
     // Bump when parsing changes so stored books are rebuilt once. StorageDb
     // uses this as its schema version, so old rows are dropped automatically.
-    static final int CACHE_VERSION = 7;
+    static final int CACHE_VERSION = 8;
     private static final long serialVersionUID = 1L;
 
     private static StorageDb db;
@@ -116,10 +115,8 @@ public final class Library {
     }
 
     /** Parsing and similarity need the offline dictionaries; launch does not. */
-    private static void ensureDictionaries(Context c) {
-        JMDict.load(c);
-        JMNedict.load(c);
-        JitenRank.load(c);
+    static void ensureDictionaries(Context c) {
+        Tokenizer.ensureReady(c);
     }
 
     private static File migrationMarker(Context c) {
@@ -516,18 +513,14 @@ public final class Library {
         if (full == null) return new ArrayList<VocabEntry>();
         book = full;
         final HashMap<String, Integer> order = new HashMap<String, Integer>();
-        int seq = 0;
-        for (PageInfo page : book.pages) {
-            String text = page.text;
-            int i = 0;
-            while (i < text.length()) {
-                int end = tokenEnd(text, i);
-                if (end < 0) { i++; continue; }
-                String word = normalizeToken(text.substring(i, end));
-                i = end;
-                if (word.length() < 2 || STOP.contains(word) || JMNedict.isName(word)) continue;
-                if (!order.containsKey(word)) order.put(word, seq++);
+        final int[] seq = new int[1];
+        Tokenizer.TokenConsumer collector = new Tokenizer.TokenConsumer() {
+            @Override public void onToken(String word, int startOffset) {
+                if (!order.containsKey(word)) order.put(word, seq[0]++);
             }
+        };
+        for (PageInfo page : book.pages) {
+            Tokenizer.tokenize(page.text, collector);
         }
         ArrayList<VocabEntry> out = new ArrayList<VocabEntry>(book.vocab);
         Collections.sort(out, new Comparator<VocabEntry>() {
@@ -573,7 +566,7 @@ public final class Library {
                 base = JMDict.similarityForm(key);
                 if (lemmaCache != null) lemmaCache.put(key, base);
             }
-            if (base == null || base.length() < 2 || STOP.contains(base) || JMNedict.isName(base)) {
+            if (!Tokenizer.isKeepableWord(base)) {
                 continue;
             }
             Integer old = out.get(base);
@@ -1362,120 +1355,18 @@ public final class Library {
 
     // -------------------------------------------------------------- tokenize
 
-    private static boolean isKanji(char c) {
-        return (c >= 0x4E00 && c <= 0x9FFF) || (c >= 0x3400 && c <= 0x4DBF);
-    }
-
-    private static boolean isHira(char c) {
-        return c >= 0x3040 && c <= 0x309F;
-    }
-
-    private static boolean isKata(char c) {
-        return (c >= 0x30A0 && c <= 0x30FF) || c == 0x30FC || c == 0x309B || c == 0x309C;
-    }
-
-    private static boolean isJapanese(char c) {
-        return isKanji(c) || isHira(c) || isKata(c);
-    }
-
-    private static final Set<String> STOP = new HashSet<String>(Arrays.asList(
-            "は", "が", "を", "に", "で", "と", "も", "の", "へ", "や", "か", "ね", "よ",
-            "わ", "お", "ご", "この", "その", "あの", "これ", "それ", "あれ", "ここ",
-            "そこ", "どこ", "だれ", "なん", "なに", "です", "ます", "ました", "でした",
-            "する", "した", "して", "ある", "いる", "なる", "なった", "いう", "ない",
-            "そして", "しかし", "また", "それで", "だから", "ので", "から", "まで",
-            "より", "など", "という", "そう", "こう", "どう", "どんな", "まず", "もし",
-            "ほか", "場合", "私", "彼女", "彼", "たち", "もの", "こと", "とき"));
-
-    // Hoshidict/Yomitan scan a lookup string from longest prefix to shortest and
-    // keep the first form the dictionary recognises. Do the same here so a run
-    // like 私の/わたしの/学生です resolves to 私/わたし/学生 instead of carrying
-    // the trailing particle or auxiliary.
-    private static String normalizeToken(String word) {
-        if (word.length() < 2 || JMDict.contains(word) || STOP.contains(word)) return word;
-        int maxCut = Math.min(4, word.length() - 1);
-        for (int cut = 1; cut <= maxCut; cut++) {
-            String prefix = word.substring(0, word.length() - cut);
-            if (JMDict.contains(prefix) || STOP.contains(prefix)) return prefix;
-        }
-        return word;
-    }
-
-    private static boolean isPunctuation(char c) {
-        return c == '\u300c' || c == '\u300d' || c == '\u300e' || c == '\u300f'
-                || c == '\u3001' || c == '\u3002' || c == '\uff01' || c == '\uff1f'
-                || c == '!' || c == '?' || c == ',' || c == '.' || c == ':'
-                || c == ';' || c == '\u2026' || c == '\u2014';
-    }
-
-    private static boolean isAllHira(String text, int from, int to) {
-        if (from >= to) return false;
-        for (int p = from; p < to; p++) {
-            if (!isHira(text.charAt(p))) return false;
-        }
-        return true;
-    }
-
-    /** End index of the next token at i, or -1 when text[i] is a delimiter. */
-    private static int tokenEnd(String text, int i) {
-        int len = text.length();
-        char c = text.charAt(i);
-        int scriptEnd = -1;
-        if (isKanji(c)) {
-            int j = i;
-            while (j < len && isKanji(text.charAt(j)) && j - i < 8) j++;
-            int k = j;
-            int okuri = 0;
-            while (k < len && isHira(text.charAt(k)) && okuri < 3) { k++; okuri++; }
-            scriptEnd = k;
-        } else if (isHira(c)) {
-            int j = i;
-            while (j < len && isHira(text.charAt(j)) && j - i < 8) j++;
-            scriptEnd = j;
-        } else if (isKata(c)) {
-            int j = i;
-            while (j < len && isKata(text.charAt(j)) && j - i < 16) j++;
-            scriptEnd = j;
-        } else {
-            return -1;
-        }
-        // Dictionary-based longest match: split runs at real word boundaries
-        // (学校生活 -> 学校/生活) instead of swallowing the whole run. A
-        // following hiragana tail is kept so normalizeToken can strip
-        // okurigana/particles from inflected forms.
-        // Punctuation and quotes are hard boundaries: never let a
-        // dictionary entry span them (e.g. 本。」は stays 本 + は).
-        int scanLimit = Math.min(len, i + 16);
-        for (int p = i; p < scanLimit; p++) {
-            if (isPunctuation(text.charAt(p))) { scanLimit = p; break; }
-        }
-        int dictEnd = JMDict.longestForm(text, i, scanLimit - i);
-        if (dictEnd >= i + 2
-                && !(dictEnd < scriptEnd && isAllHira(text, dictEnd, scriptEnd))) {
-            return dictEnd;
-        }
-        return scriptEnd;
-    }
-
-    private static HashMap<String, Integer> tokenize(String text, Map<String, String> snippets) {
-        HashMap<String, Integer> counts = new HashMap<String, Integer>();
-        int i = 0;
-        int len = text.length();
-        while (i < len) {
-            int start = i;
-            int end = tokenEnd(text, i);
-            if (end < 0) { i++; continue; }
-            String word = text.substring(i, end);
-            i = end;
-            // Prefer the longest recognised prefix, as a dictionary scanner does.
-            word = normalizeToken(word);
-            if (word.length() < 2 || STOP.contains(word) || JMNedict.isName(word)) continue;
-            Integer old = counts.get(word);
-            counts.put(word, old == null ? 1 : old + 1);
-            if (!snippets.containsKey(word)) {
-                snippets.put(word, makeSnippet(text, word, start));
+    private static HashMap<String, Integer> tokenize(final String text,
+                                                     final Map<String, String> snippets) {
+        final HashMap<String, Integer> counts = new HashMap<String, Integer>();
+        Tokenizer.tokenize(text, new Tokenizer.TokenConsumer() {
+            @Override public void onToken(String word, int startOffset) {
+                Integer old = counts.get(word);
+                counts.put(word, old == null ? 1 : old + 1);
+                if (!snippets.containsKey(word)) {
+                    snippets.put(word, makeSnippet(text, word, startOffset));
+                }
             }
-        }
+        });
         return counts;
     }
 
@@ -1484,7 +1375,7 @@ public final class Library {
         char prev = 0;
         for (int i = 0; i < text.length(); i++) {
             char c = text.charAt(i);
-            if (isJapanese(c)) {
+            if (Tokenizer.isJapanese(c)) {
                 if (prev != 0) {
                     String g = "" + prev + c;
                     Integer old = grams.get(g);
@@ -1537,11 +1428,32 @@ public final class Library {
     /** Recreates the short quotation shown for a word from the page text. */
     static String makeSnippet(String text, String word, int pos) {
         int len = text.length();
-        if (pos < 0 || !text.startsWith(word, pos)) pos = text.indexOf(word);
-        if (pos < 0) pos = 0;
+        if (pos < 0) {
+            pos = text.indexOf(word);
+            if (pos < 0 && word.length() >= 2) {
+                pos = text.indexOf(word.substring(0, word.length() - 1));
+            }
+            if (pos < 0) pos = 0;
+        }
         int from = Math.max(0, pos - 18);
         int to = Math.min(len, pos + word.length() + 22);
         return "…" + text.substring(from, to).replace('\n', ' ').trim() + "…";
+    }
+
+    /** Retokenizes an already-parsed book from its stored page text. */
+    static void retokenizeBook(BookInfo book) {
+        if (book == null || book.pages == null) return;
+        for (PageInfo page : book.pages) {
+            page.snippets.clear();
+            page.vocab = tokenize(page.text, page.snippets);
+            if (page.grams == null || page.grams.isEmpty()) {
+                page.grams = makeGrams(page.text);
+                trimGrams(page.grams);
+            }
+        }
+        rebuildDerived(book);
+        book.pageCount = book.pages.size();
+        book.vocabCount = book.vocab.size();
     }
 
     /**

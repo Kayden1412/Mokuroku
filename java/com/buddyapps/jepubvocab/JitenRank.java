@@ -45,6 +45,10 @@ final class JitenRank {
         ranks = map;
     }
 
+    static Map<String, Integer> rankMap() {
+        return ranks;
+    }
+
     static int rank(String word) {
         if (ranks == null || word == null) return DEFAULT_RANK;
         Integer r = ranks.get(word);
