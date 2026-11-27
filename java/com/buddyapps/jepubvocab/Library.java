@@ -93,6 +93,12 @@ public final class Library {
         ArrayList<BookInfo> stored = db.loadBooks();
         if (!stored.isEmpty()) {
             books.addAll(stored);
+            if (!packed(c)) {
+                // One-time repack: early v1.35 rows were saved without string
+                // canonicalisation and used far more space than necessary.
+                db.saveBooks(books);
+                markPacked(c);
+            }
         } else if (!migrated(c)) {
             // One-time upgrade from the old library.bin + copied EPUBs layout.
             migrateLegacy(c);
@@ -112,6 +118,20 @@ public final class Library {
     private static void markMigrated(Context c) {
         try {
             migrationMarker(c).createNewFile();
+        } catch (Throwable ignored) { }
+    }
+
+    private static File packedMarker(Context c) {
+        return new File(c.getFilesDir(), "storage.packed");
+    }
+
+    private static boolean packed(Context c) {
+        return packedMarker(c).exists();
+    }
+
+    private static void markPacked(Context c) {
+        try {
+            packedMarker(c).createNewFile();
         } catch (Throwable ignored) { }
     }
 
@@ -154,6 +174,7 @@ public final class Library {
         // An import could have copied EPUBs but crashed before writing the cache.
         syncWithDisk(c);
         if (!books.isEmpty()) db.saveBooks(books);
+        markPacked(c);
         cache.delete();
         new File(c.getFilesDir(), "library.version").delete();
     }
@@ -228,6 +249,7 @@ public final class Library {
             prepare();
             db.saveBooks(books);
             markMigrated(c);
+            markPacked(c);
         }
         return added;
     }
