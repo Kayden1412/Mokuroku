@@ -11,7 +11,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * SQLite store for parsed books. The extracted text, vocabulary, word profiles
@@ -42,6 +44,11 @@ final class StorageDb extends SQLiteOpenHelper {
 
     private static byte[] serialize(Library.BookInfo book) {
         try {
+            // Tokens are created as fresh String objects for every occurrence.
+            // Canonicalising them lets ObjectOutputStream write each distinct
+            // word once per book instead of once per page and map.
+            Map<String, String> pool = new HashMap<String, String>();
+            canonicalize(book, pool);
             ByteArrayOutputStream bytes = new ByteArrayOutputStream();
             ObjectOutputStream out = new ObjectOutputStream(bytes);
             try {
@@ -53,6 +60,57 @@ final class StorageDb extends SQLiteOpenHelper {
         } catch (Throwable e) {
             return null;
         }
+    }
+
+    private static String canonical(String s, Map<String, String> pool) {
+        if (s == null) return null;
+        String shared = pool.get(s);
+        if (shared != null) return shared;
+        pool.put(s, s);
+        return s;
+    }
+
+    private static <V> HashMap<String, V> canonicalKeys(HashMap<String, V> map,
+                                                         Map<String, String> pool) {
+        HashMap<String, V> out = new HashMap<String, V>(map.size());
+        for (Map.Entry<String, V> e : map.entrySet()) {
+            out.put(canonical(e.getKey(), pool), e.getValue());
+        }
+        return out;
+    }
+
+    private static HashMap<String, String> canonicalValues(HashMap<String, String> map,
+                                                            Map<String, String> pool) {
+        HashMap<String, String> out = new HashMap<String, String>(map.size());
+        for (Map.Entry<String, String> e : map.entrySet()) {
+            out.put(canonical(e.getKey(), pool), canonical(e.getValue(), pool));
+        }
+        return out;
+    }
+
+    private static void canonicalize(Library.BookInfo book, Map<String, String> pool) {
+        book.title = canonical(book.title, pool);
+        book.author = canonical(book.author, pool);
+        book.fileName = canonical(book.fileName, pool);
+        for (Library.PageInfo page : book.pages) {
+            page.text = canonical(page.text, pool);
+            page.vocab = canonicalKeys(page.vocab, pool);
+            page.snippets = canonicalValues(page.snippets, pool);
+            page.grams = canonicalKeys(page.grams, pool);
+            for (Library.VocabEntry v : page.vocabList) {
+                v.word = canonical(v.word, pool);
+                v.snippet = canonical(v.snippet, pool);
+            }
+            page.firstSnippetWord = canonical(page.firstSnippetWord, pool);
+            page.firstSnippet = canonical(page.firstSnippet, pool);
+        }
+        for (Library.VocabEntry v : book.vocab) {
+            v.word = canonical(v.word, pool);
+            v.snippet = canonical(v.snippet, pool);
+        }
+        book.vocabMap = canonicalKeys(book.vocabMap, pool);
+        book.snippets = canonicalValues(book.snippets, pool);
+        book.grams = canonicalKeys(book.grams, pool);
     }
 
     private static Library.BookInfo deserialize(byte[] data) {

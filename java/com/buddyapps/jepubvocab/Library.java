@@ -351,7 +351,7 @@ public final class Library {
     }
 
     public static long databaseBytes(Context c) {
-        return new File(c.getFilesDir(), "mokuroku.db").length();
+        return c.getDatabasePath("mokuroku.db").length();
     }
 
     /** Unique word count; prepared once per library change, not per screen refresh. */
