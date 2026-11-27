@@ -421,6 +421,13 @@ public class MainActivity extends Activity {
     private void rebuild() {
         final ProgressDialog progress = ProgressDialog.show(this, "Reloading",
                 "Parsing your EPUB library…", true, false);
+        // Drop references to the old books before parsing a whole new set.
+        // Otherwise the old vocabulary and cover bitmaps stay live during the
+        // rebuild and can push the process over its heap limit.
+        displayed.clear();
+        listAdapter.notifyDataSetChanged();
+        gridAdapter.notifyDataSetChanged();
+        Ui.clearCovers();
         new Thread(new Runnable() {
             @Override public void run() {
                 final Throwable[] failure = new Throwable[1];

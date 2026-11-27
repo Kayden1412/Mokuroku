@@ -178,6 +178,15 @@ public final class Library {
         JMDict.load(c);
         JMNedict.load(c);
         cacheFile = new File(c.getFilesDir(), "library.bin");
+        Ui.clearCovers();
+        allVocab = null;
+        totalVocabCount = -1;
+        bookSimilarCache.clear();
+        similarityMatrix = null;
+        similarTopK = null;
+        df.clear();
+        wordDf.clear();
+        bookSimVocab.clear();
         books.clear();
         File dir = new File(c.getFilesDir(), "books");
         if (dir.exists()) {
