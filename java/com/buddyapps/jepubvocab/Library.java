@@ -46,7 +46,7 @@ public final class Library {
     private static final int MAX_PAGES = 400;
     private static final int MAX_GRAMS = 180;
     // Bump when parsing changes so old cached vocabularies are rebuilt once.
-    private static final int CACHE_VERSION = 3;
+    private static final int CACHE_VERSION = 4;
     private static final long serialVersionUID = 1L;
 
     private static File cacheFile;
@@ -82,6 +82,8 @@ public final class Library {
     }
 
     public static void load(Context c) {
+        JMDict.load(c);
+        JMNedict.load(c);
         cacheFile = new File(c.getFilesDir(), "library.bin");
         books.clear();
         boolean cacheOk = cacheVersionOk(c);
@@ -172,6 +174,8 @@ public final class Library {
     }
 
     public static void rebuild(Context c) {
+        JMDict.load(c);
+        JMNedict.load(c);
         cacheFile = new File(c.getFilesDir(), "library.bin");
         books.clear();
         File dir = new File(c.getFilesDir(), "books");
@@ -920,7 +924,7 @@ public final class Library {
             if (word == null) continue;
             // Prefer the longest recognised prefix, as a dictionary scanner does.
             word = normalizeToken(word);
-            if (word.length() < 2 || STOP.contains(word)) continue;
+            if (word.length() < 2 || STOP.contains(word) || JMNedict.isName(word)) continue;
             Integer old = counts.get(word);
             counts.put(word, old == null ? 1 : old + 1);
             if (!snippets.containsKey(word)) {

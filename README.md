@@ -19,6 +19,9 @@ Icons from [Lucide](https://lucide.dev/) (ISC License).
 
 Definitions are from [JMdict](https://www.edrdg.org/jmdict/edict_doc.html)
 (EDRDG, CC BY-SA 3.0); the embedded file contains the common-word subset.
+Person-name filtering uses a Bloom filter over kanji forms from
+[JMnedict](https://www.edrdg.org/enamdict/edict_doc.html) (EDRDG, CC BY-SA 4.0),
+regenerated with `scripts/gen_jmnedict_bloom.py`.
 Deinflection rules are derived from
 [hoshidicts](https://github.com/Manhhao/hoshidicts), which follows Yomitan's
 Japanese transforms. Regenerate them with `scripts/gen_deinflector.py` from a

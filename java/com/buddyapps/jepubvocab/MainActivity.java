@@ -186,6 +186,7 @@ public class MainActivity extends Activity {
                 try {
                     JMDict.load(MainActivity.this);
                     JitenRank.load(MainActivity.this);
+                    JMNedict.load(MainActivity.this);
                     Library.load(MainActivity.this);
                 } catch (Throwable e) {
                     failure[0] = e;
