@@ -99,10 +99,12 @@ public final class Library {
                 db.saveBooks(books);
                 markPacked(c);
             }
-        } else if (!migrated(c)) {
-            // One-time upgrade from the old library.bin + copied EPUBs layout.
+        } else if (!migrated(c) || (!cleared(c) && hasCopiedEpubs(c))) {
+            // First install, or a storage-format upgrade that dropped rows:
+            // recover once from legacy files. An intentional clear is respected.
             migrateLegacy(c);
             markMigrated(c);
+            markNotCleared(c);
         }
         prepare();
     }
@@ -133,6 +135,33 @@ public final class Library {
         try {
             packedMarker(c).createNewFile();
         } catch (Throwable ignored) { }
+    }
+
+    private static File clearedMarker(Context c) {
+        return new File(c.getFilesDir(), "storage.cleared");
+    }
+
+    private static boolean cleared(Context c) {
+        return clearedMarker(c).exists();
+    }
+
+    private static void markCleared(Context c) {
+        try {
+            clearedMarker(c).createNewFile();
+        } catch (Throwable ignored) { }
+    }
+
+    private static void markNotCleared(Context c) {
+        if (clearedMarker(c).exists()) clearedMarker(c).delete();
+    }
+
+    private static boolean hasCopiedEpubs(Context c) {
+        File[] files = booksDir(c).listFiles();
+        if (files == null) return false;
+        for (File f : files) {
+            if (f.isFile() && f.getName().toLowerCase().endsWith(".epub")) return true;
+        }
+        return false;
     }
 
     private static boolean legacyVersionOk(Context c) {
@@ -175,6 +204,7 @@ public final class Library {
         syncWithDisk(c);
         if (!books.isEmpty()) db.saveBooks(books);
         markPacked(c);
+        markNotCleared(c);
         cache.delete();
         new File(c.getFilesDir(), "library.version").delete();
     }
@@ -250,6 +280,7 @@ public final class Library {
             db.saveBooks(books);
             markMigrated(c);
             markPacked(c);
+            markNotCleared(c);
         }
         return added;
     }
@@ -312,6 +343,7 @@ public final class Library {
         db.delete(book.fileName);
         File f = new File(booksDir(c), book.fileName);
         if (f.exists()) f.delete();
+        if (books.isEmpty()) markCleared(c); else markNotCleared(c);
         clearCaches();
         prepare();
     }
@@ -321,6 +353,7 @@ public final class Library {
         ensureDb(c);
         books.remove(book);
         db.delete(book.fileName);
+        if (books.isEmpty()) markCleared(c); else markNotCleared(c);
         clearCaches();
         prepare();
     }
@@ -330,6 +363,7 @@ public final class Library {
         ensureDb(c);
         books.clear();
         db.clear();
+        markCleared(c);
         clearCaches();
         prepare();
     }
