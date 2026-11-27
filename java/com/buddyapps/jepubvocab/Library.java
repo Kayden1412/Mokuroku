@@ -262,6 +262,39 @@ public final class Library {
         return entries;
     }
 
+    /**
+     * Vocabulary in order of first appearance. Uses a temporary word->position
+     * map and reuses the existing VocabEntry objects, so no second vocabulary
+     * model is kept in memory after the caller drops the returned list.
+     */
+    public static ArrayList<VocabEntry> chronologicalVocab(final BookInfo book) {
+        final HashMap<String, Integer> order = new HashMap<String, Integer>();
+        int seq = 0;
+        for (PageInfo page : book.pages) {
+            String text = page.text;
+            int i = 0;
+            while (i < text.length()) {
+                int end = tokenEnd(text, i);
+                if (end < 0) { i++; continue; }
+                String word = normalizeToken(text.substring(i, end));
+                i = end;
+                if (word.length() < 2 || STOP.contains(word) || JMNedict.isName(word)) continue;
+                if (!order.containsKey(word)) order.put(word, seq++);
+            }
+        }
+        ArrayList<VocabEntry> out = new ArrayList<VocabEntry>(book.vocab);
+        Collections.sort(out, new Comparator<VocabEntry>() {
+            @Override public int compare(VocabEntry a, VocabEntry b) {
+                Integer pa = order.get(a.word);
+                Integer pb = order.get(b.word);
+                int c = Integer.compare(pa == null ? Integer.MAX_VALUE : pa,
+                        pb == null ? Integer.MAX_VALUE : pb);
+                return c != 0 ? c : Integer.compare(b.count, a.count);
+            }
+        });
+        return out;
+    }
+
     private static void save() {
         if (cacheFile == null) return;
         File tmp = new File(cacheFile.getParentFile(), "library.bin.tmp");
@@ -1042,49 +1075,55 @@ public final class Library {
         return true;
     }
 
+    /** End index of the next token at i, or -1 when text[i] is a delimiter. */
+    private static int tokenEnd(String text, int i) {
+        int len = text.length();
+        char c = text.charAt(i);
+        int scriptEnd = -1;
+        if (isKanji(c)) {
+            int j = i;
+            while (j < len && isKanji(text.charAt(j)) && j - i < 8) j++;
+            int k = j;
+            int okuri = 0;
+            while (k < len && isHira(text.charAt(k)) && okuri < 3) { k++; okuri++; }
+            scriptEnd = k;
+        } else if (isHira(c)) {
+            int j = i;
+            while (j < len && isHira(text.charAt(j)) && j - i < 8) j++;
+            scriptEnd = j;
+        } else if (isKata(c)) {
+            int j = i;
+            while (j < len && isKata(text.charAt(j)) && j - i < 16) j++;
+            scriptEnd = j;
+        } else {
+            return -1;
+        }
+        // Dictionary-based longest match: split runs at real word boundaries
+        // (学校生活 -> 学校/生活) instead of swallowing the whole run. A
+        // following hiragana tail is kept so normalizeToken can strip
+        // okurigana/particles from inflected forms.
+        // Punctuation and quotes are hard boundaries: never let a
+        // dictionary entry span them (e.g. 本。」は stays 本 + は).
+        int scanLimit = Math.min(len, i + 16);
+        for (int p = i; p < scanLimit; p++) {
+            if (isPunctuation(text.charAt(p))) { scanLimit = p; break; }
+        }
+        int dictEnd = JMDict.longestForm(text, i, scanLimit - i);
+        if (dictEnd >= i + 2
+                && !(dictEnd < scriptEnd && isAllHira(text, dictEnd, scriptEnd))) {
+            return dictEnd;
+        }
+        return scriptEnd;
+    }
+
     private static HashMap<String, Integer> tokenize(String text, Map<String, String> snippets) {
         HashMap<String, Integer> counts = new HashMap<String, Integer>();
         int i = 0;
         int len = text.length();
         while (i < len) {
             int start = i;
-            char c = text.charAt(i);
-            int scriptEnd = -1;
-            if (isKanji(c)) {
-                int j = i;
-                while (j < len && isKanji(text.charAt(j)) && j - i < 8) j++;
-                int k = j;
-                int okuri = 0;
-                while (k < len && isHira(text.charAt(k)) && okuri < 3) { k++; okuri++; }
-                scriptEnd = k;
-            } else if (isHira(c)) {
-                int j = i;
-                while (j < len && isHira(text.charAt(j)) && j - i < 8) j++;
-                scriptEnd = j;
-            } else if (isKata(c)) {
-                int j = i;
-                while (j < len && isKata(text.charAt(j)) && j - i < 16) j++;
-                scriptEnd = j;
-            } else {
-                i++;
-                continue;
-            }
-            // Dictionary-based longest match: split runs at real word boundaries
-            // (学校生活 -> 学校/生活) instead of swallowing the whole run. A
-            // following hiragana tail is kept so normalizeToken can strip
-            // okurigana/particles from inflected forms.
-            // Punctuation and quotes are hard boundaries: never let a
-            // dictionary entry span them (e.g. 本。」は stays 本 + は).
-            int scanLimit = Math.min(len, i + 16);
-            for (int p = i; p < scanLimit; p++) {
-                if (isPunctuation(text.charAt(p))) { scanLimit = p; break; }
-            }
-            int dictEnd = JMDict.longestForm(text, i, scanLimit - i);
-            int end = scriptEnd;
-            if (dictEnd >= i + 2) {
-                end = (dictEnd < scriptEnd && isAllHira(text, dictEnd, scriptEnd))
-                        ? scriptEnd : dictEnd;
-            }
+            int end = tokenEnd(text, i);
+            if (end < 0) { i++; continue; }
             String word = text.substring(i, end);
             i = end;
             // Prefer the longest recognised prefix, as a dictionary scanner does.
