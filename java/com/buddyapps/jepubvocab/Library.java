@@ -488,18 +488,18 @@ public final class Library {
                 }
             }
         }
-        final Map<String, Integer> c = counts;
+        final Map<String, Integer> countsMap = counts;
         ArrayList<String> words = new ArrayList<String>(counts.keySet());
         Collections.sort(words, new Comparator<String>() {
             @Override public int compare(String a, String b) {
-                int n = c.get(b).compareTo(c.get(a));
+                int n = countsMap.get(b).compareTo(countsMap.get(a));
                 return n != 0 ? n : a.compareTo(b);
             }
         });
         ArrayList<VocabEntry> entries = new ArrayList<VocabEntry>(words.size());
         for (String w : words) {
             String s = snippets.get(w);
-            entries.add(new VocabEntry(w, c.get(w), s == null ? "" : s));
+            entries.add(new VocabEntry(w, countsMap.get(w), s == null ? "" : s));
         }
         allVocab = entries;
         return entries;
@@ -561,7 +561,7 @@ public final class Library {
         allVocab = null;
     }
 
-    private static Map<String, Integer> toSimilarityVocab(
+    private static HashMap<String, Integer> toSimilarityVocab(
             Map<String, Integer> raw, Map<String, String> lemmaCache) {
         HashMap<String, Integer> out = new HashMap<String, Integer>(raw.size());
         for (Map.Entry<String, Integer> e : raw.entrySet()) {
