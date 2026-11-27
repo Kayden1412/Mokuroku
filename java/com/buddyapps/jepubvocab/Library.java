@@ -46,7 +46,7 @@ public final class Library {
     private static final int MAX_PAGES = 400;
     private static final int MAX_GRAMS = 180;
     // Bump when parsing changes so old cached vocabularies are rebuilt once.
-    private static final int CACHE_VERSION = 6;
+    private static final int CACHE_VERSION = 7;
     private static final long serialVersionUID = 1L;
 
     private static File cacheFile;
@@ -809,6 +809,27 @@ public final class Library {
         return out.toString();
     }
 
+    // Full-width ASCII (Ａ-Ｚ, ａ-ｚ, ０-９ and ！？ etc.) folds onto the same
+    // tokens as their half-width forms. Do this before stats and tokenizing so
+    // page text, dialogue counts and vocabulary all agree.
+    private static String normalizeWidth(String s) {
+        StringBuilder out = null;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            char n = (c >= '\uFF01' && c <= '\uFF5E') ? (char) (c - 0xFEE0) : c;
+            if (n == c) {
+                if (out != null) out.append(c);
+            } else {
+                if (out == null) {
+                    out = new StringBuilder(s.length());
+                    out.append(s, 0, i);
+                }
+                out.append(n);
+            }
+        }
+        return out == null ? s : out.toString();
+    }
+
     private static String htmlToText(String html) {
         String s = html.replaceAll("(?is)<(script|style|head)\\b[^>]*>.*?</\\1>", " ");
         // Ruby annotations are readings, not part of the prose. Without this,
@@ -819,6 +840,7 @@ public final class Library {
         s = s.replaceAll("(?i)</?(p|div|h[1-6]|li|tr|section|blockquote|article)\\b[^>]*>", "\n");
         s = s.replaceAll("(?s)<[^>]+>", "");
         s = decodeEntities(s);
+        s = normalizeWidth(s);
         s = s.replace('\u3000', ' ');
         s = s.replaceAll("[ \\t\\r\\f]+", " ");
         s = s.replaceAll(" *\\n *", "\n");
@@ -1005,6 +1027,13 @@ public final class Library {
         return word;
     }
 
+    private static boolean isPunctuation(char c) {
+        return c == '\u300c' || c == '\u300d' || c == '\u300e' || c == '\u300f'
+                || c == '\u3001' || c == '\u3002' || c == '\uff01' || c == '\uff1f'
+                || c == '!' || c == '?' || c == ',' || c == '.' || c == ':'
+                || c == ';' || c == '\u2026' || c == '\u2014';
+    }
+
     private static boolean isAllHira(String text, int from, int to) {
         if (from >= to) return false;
         for (int p = from; p < to; p++) {
@@ -1044,7 +1073,13 @@ public final class Library {
             // (学校生活 -> 学校/生活) instead of swallowing the whole run. A
             // following hiragana tail is kept so normalizeToken can strip
             // okurigana/particles from inflected forms.
-            int dictEnd = JMDict.longestForm(text, i, 16);
+            // Punctuation and quotes are hard boundaries: never let a
+            // dictionary entry span them (e.g. 本。」は stays 本 + は).
+            int scanLimit = Math.min(len, i + 16);
+            for (int p = i; p < scanLimit; p++) {
+                if (isPunctuation(text.charAt(p))) { scanLimit = p; break; }
+            }
+            int dictEnd = JMDict.longestForm(text, i, scanLimit - i);
             int end = scriptEnd;
             if (dictEnd >= i + 2) {
                 end = (dictEnd < scriptEnd && isAllHira(text, dictEnd, scriptEnd))

@@ -49,7 +49,8 @@ The signed APK appears at `build/app.apk`.
 - Text is stripped of markup, split into ~1400-character pages, and tokenized with
   a dictionary-based longest-match tokenizer: the embedded JMdict surface forms
   are held in a compact trie, with script runs (kanji + okurigana, hiragana,
-  katakana) as fallback. Common particles are filtered out.
+  katakana) as fallback. Full-width ASCII is folded to half-width and Japanese
+  punctuation/quotes act as word boundaries. Common particles are filtered out.
 - Similarity blends sublinear-TF (`1 + ln(count)`), rank-weighted TF-IDF
   cosine over deinflected content words (JMdict POS filtering + Jiten global
   ranks, with low-overlap damping) and sublinear-TF Japanese character bigrams.
