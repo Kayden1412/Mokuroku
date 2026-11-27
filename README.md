@@ -3,7 +3,7 @@
 An Android app for Japanese EPUBs. Pick many `.epub` files, and it parses them into:
 
 - a library with card, list or grid display, covers, search, and sorting by name,
-  time added, characters or words,
+  time added, characters, words, dialogue %, or average sentence length,
 - a page-by-page reader,
 - a vocabulary list extracted from the Japanese text, with offline definitions
   from an embedded subset of JMdict and Yomitan-style deinflection so inflected

@@ -46,7 +46,7 @@ public final class Library {
     private static final int MAX_PAGES = 400;
     private static final int MAX_GRAMS = 180;
     // Bump when parsing changes so old cached vocabularies are rebuilt once.
-    private static final int CACHE_VERSION = 4;
+    private static final int CACHE_VERSION = 5;
     private static final long serialVersionUID = 1L;
 
     private static File cacheFile;
@@ -601,9 +601,10 @@ public final class Library {
                 book.author = firstCreator(opf);
                 book.fileName = file.getName();
                 book.addedAt = file.lastModified();
-                book.charCount = countChars(all.toString());
+                String fullText = all.toString();
+                computeTextStats(fullText, book);
                 book.cover = extractCover(zip, opf, opfDir, manifest);
-                book.pages = splitPages(all.toString());
+                book.pages = splitPages(fullText);
                 for (PageInfo page : book.pages) {
                     for (Map.Entry<String, Integer> e : page.vocab.entrySet()) {
                         Integer old = book.vocabMap.get(e.getKey());
@@ -768,12 +769,67 @@ public final class Library {
         return s.trim();
     }
 
-    private static long countChars(String text) {
-        long n = 0;
+    /** Computes character count, dialogue percentage, and average sentence length. */
+    private static void computeTextStats(String text, BookInfo book) {
+        long totalChars = 0;
+        long dialogueChars = 0;
+        long sentenceChars = 0;
+        long sentenceCount = 0;
+        boolean inDialogue = false;
+        boolean hasContent = false;
+        boolean prevNewline = false;
+        long curSentenceChars = 0;
+
         for (int i = 0; i < text.length(); i++) {
-            if (!Character.isWhitespace(text.charAt(i))) n++;
+            char c = text.charAt(i);
+            if (c == '\n') {
+                // Reset unclosed quotes across block breaks (\n\n) so a missing
+                // closing bracket never taints the rest of the book, while
+                // keeping single-<br> line wraps inside dialogue intact.
+                if (prevNewline) inDialogue = false;
+                prevNewline = true;
+                if (hasContent && curSentenceChars > 0) {
+                    sentenceChars += curSentenceChars;
+                    sentenceCount++;
+                }
+                curSentenceChars = 0;
+                hasContent = false;
+                continue;
+            }
+            prevNewline = false;
+            if (Character.isWhitespace(c)) continue;
+
+            totalChars++;
+            if (c == '\u300c') { // 「
+                inDialogue = true;
+                dialogueChars++;
+            } else if (c == '\u300d') { // 」
+                if (inDialogue) dialogueChars++;
+                inDialogue = false;
+            } else if (inDialogue) {
+                dialogueChars++;
+            }
+
+            curSentenceChars++;
+            if (Character.isLetterOrDigit(c)) hasContent = true;
+
+            if (c == '\u3002' || c == '\uff01' || c == '\uff1f' || c == '!' || c == '?') {
+                if (hasContent && curSentenceChars > 0) {
+                    sentenceChars += curSentenceChars;
+                    sentenceCount++;
+                }
+                curSentenceChars = 0;
+                hasContent = false;
+            }
         }
-        return n;
+        if (hasContent && curSentenceChars > 0) {
+            sentenceChars += curSentenceChars;
+            sentenceCount++;
+        }
+
+        book.charCount = totalChars;
+        book.dialoguePercent = totalChars > 0 ? (dialogueChars * 100.0) / totalChars : 0.0;
+        book.avgSentenceLength = sentenceCount > 0 ? (double) sentenceChars / sentenceCount : 0.0;
     }
 
     /** Finds the EPUB cover image and downsizes it to keep the app small. */
@@ -1050,6 +1106,8 @@ public final class Library {
         public int index;
         public long addedAt;
         public long charCount;
+        public double dialoguePercent;
+        public double avgSentenceLength;
         public byte[] cover;
         public ArrayList<PageInfo> pages = new ArrayList<PageInfo>();
         public ArrayList<VocabEntry> vocab = new ArrayList<VocabEntry>();
@@ -1059,7 +1117,9 @@ public final class Library {
 
         public String summary() {
             return Ui.num(pages.size()) + " pages  ·  " + Ui.num(charCount)
-                    + " chars  ·  " + Ui.num(vocab.size()) + " words";
+                    + " chars  ·  " + Ui.num(vocab.size()) + " words  ·  "
+                    + Math.round(dialoguePercent) + "% dialogue  ·  "
+                    + Ui.dec(avgSentenceLength) + " chars/sent";
         }
     }
 

@@ -41,7 +41,8 @@ public class MainActivity extends Activity {
 
     private static final int PICK_EPUBS = 42;
     private static final String[] VIEW_NAMES = {"Card", "List", "Grid"};
-    private static final String[] SORT_NAMES = {"Name", "Time added", "Characters", "Words"};
+    private static final String[] SORT_NAMES = {
+            "Name", "Time added", "Characters", "Words", "Dialogue", "Avg sentence length"};
 
     private SharedPreferences prefs;
     private int viewMode;
@@ -322,6 +323,10 @@ public class MainActivity extends Activity {
                 else if (sort == 2) result = Long.compare(a.charCount, b.charCount);
                 else if (sort == 3) result = Integer.compare(
                         a.vocab.size(), b.vocab.size());
+                else if (sort == 4) result = Double.compare(
+                        a.dialoguePercent, b.dialoguePercent);
+                else if (sort == 5) result = Double.compare(
+                        a.avgSentenceLength, b.avgSentenceLength);
                 else result = a.title.compareToIgnoreCase(b.title);
                 return sortDescending ? -result : result;
             }

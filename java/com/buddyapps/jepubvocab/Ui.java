@@ -83,6 +83,11 @@ final class Ui {
         return NumberFormat.getNumberInstance(Locale.US).format(value);
     }
 
+    /** Format a floating-point statistic with one decimal place. */
+    static String dec(double value) {
+        return String.format(Locale.US, "%.1f", value);
+    }
+
     /** A compact Lucide icon button, tinted for the current theme. */
     static ImageButton iconButton(Context c, int icon, String description,
                                   View.OnClickListener listener) {
@@ -169,7 +174,7 @@ final class Ui {
             title.setMaxLines(2);
             box.addView(title);
             TextView stats = label(c, sub, 10, secondary(c), false);
-            stats.setMaxLines(2);
+            stats.setMaxLines(3);
             box.addView(stats);
             return box;
         }
@@ -189,7 +194,7 @@ final class Ui {
         title.setMaxLines(2);
         texts.addView(title);
         TextView stats = label(c, sub, 11, secondary(c), false);
-        stats.setMaxLines(3);
+        stats.setMaxLines(4);
         texts.addView(stats);
         row.addView(texts, new LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
