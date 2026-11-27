@@ -45,8 +45,11 @@ The signed APK appears at `build/app.apk`.
 
 ## How it works
 
-- EPUBs are copied into the app's private storage and parsed as ZIP archives:
-  `container.xml` → OPF metadata → spine-ordered XHTML files.
+- Picked EPUBs are staged in the cache only while parsing, then deleted. Only the
+  extracted text, vocabulary/word profiles and a resized cover are stored, in an
+  SQLite database (`mokuroku.db`), so launch never reparses the source books.
+  EPUBs copied by older versions are shown in the **Storage** tab and can be
+  deleted there.
 - Text is stripped of markup, split into ~1400-character pages, and tokenized with
   a dictionary-based longest-match tokenizer: the embedded JMdict surface forms
   are held in a compact trie, with script runs (kanji + okurigana, hiragana,
@@ -56,5 +59,6 @@ The signed APK appears at `build/app.apk`.
   cosine over deinflected content words (JMdict POS filtering + Jiten global
   ranks, with low-overlap damping) and sublinear-TF Japanese character bigrams.
   Common words are omitted from the shared-word list.
-- Parsed books are cached so later launches start quickly. Use **Reload** after
-  replacing files. Cover images are downscaled to 360×480 JPEGs to keep the app small.
+- The **Library** tab is the main screen; **Storage** shows how much space computed
+  data and old EPUB copies use and lets you delete either per book or in bulk.
+- Cover images are downscaled to 360×480 JPEGs to keep the app small.

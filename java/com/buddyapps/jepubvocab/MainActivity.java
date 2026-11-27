@@ -3,14 +3,12 @@ package com.buddyapps.jepubvocab;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.ProgressDialog;
-import android.content.ContentResolver;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.database.Cursor;
+import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
-import android.provider.OpenableColumns;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.Gravity;
@@ -18,22 +16,24 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
+import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ImageButton;
 import android.widget.FrameLayout;
 import android.widget.GridView;
 import android.widget.LinearLayout;
 import android.widget.ListView;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.File;
-import java.io.FileOutputStream;
-import java.io.InputStream;
 import java.text.Normalizer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 
@@ -60,6 +60,12 @@ public class MainActivity extends Activity {
     private ArrayAdapter<Library.BookInfo> listAdapter;
     private ArrayAdapter<Library.BookInfo> gridAdapter;
     private final ArrayList<Library.BookInfo> displayed = new ArrayList<Library.BookInfo>();
+    private LinearLayout libraryView;
+    private View storageView;
+    private LinearLayout storageList;
+    private TextView storageSummary;
+    private Button libraryTab;
+    private Button storageTab;
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -71,16 +77,19 @@ public class MainActivity extends Activity {
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(20), dp(16), dp(20), dp(8));
+
+        libraryView = new LinearLayout(this);
+        libraryView.setOrientation(LinearLayout.VERTICAL);
+        libraryView.setPadding(dp(20), dp(16), dp(20), dp(8));
 
         info = Ui.label(this, "", 12, Ui.secondary(this), false);
-        root.addView(info);
+        libraryView.addView(info);
 
         search = new EditText(this);
         search.setHint("Search title");
         search.setTextSize(14);
         search.setSingleLine(true);
-        root.addView(search);
+        libraryView.addView(search);
 
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
@@ -113,7 +122,7 @@ public class MainActivity extends Activity {
             }
         });
         bar.addView(orderButton);
-        root.addView(bar);
+        libraryView.addView(bar);
 
         holder = new FrameLayout(this);
         holder.setLayoutParams(new LinearLayout.LayoutParams(
@@ -138,9 +147,17 @@ public class MainActivity extends Activity {
         emptyView.setLayoutParams(elp);
         list.setEmptyView(emptyView);
         grid.setEmptyView(emptyView);
-        root.addView(holder);
+        libraryView.addView(holder);
+
+        storageView = buildStorageView();
+        root.addView(libraryView, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        root.addView(storageView, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        root.addView(buildTabs());
 
         setContentView(root);
+        showTab(true);
 
         listAdapter = new ArrayAdapter<Library.BookInfo>(this,
                 android.R.layout.simple_list_item_1, displayed) {
@@ -208,6 +225,259 @@ public class MainActivity extends Activity {
     }
 
     private int dp(int value) { return Ui.dp(this, value); }
+
+    // ------------------------------------------------------------- bottom tabs
+
+    private View buildTabs() {
+        LinearLayout tabs = new LinearLayout(this);
+        tabs.setOrientation(LinearLayout.HORIZONTAL);
+        View top = new View(this);
+        top.setBackgroundColor(Ui.dividerColor(this));
+        top.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 1));
+
+        libraryTab = tabButton("Library", R.drawable.ic_view_list, new View.OnClickListener() {
+            @Override public void onClick(View v) { showTab(true); }
+        });
+        storageTab = tabButton("Storage", R.drawable.ic_delete, new View.OnClickListener() {
+            @Override public void onClick(View v) { showTab(false); }
+        });
+        libraryTab.setLayoutParams(new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        storageTab.setLayoutParams(new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        tabs.addView(libraryTab);
+        tabs.addView(storageTab);
+        // The divider is drawn by the top of this bar, not by tab buttons.
+        LinearLayout wrapper = new LinearLayout(this);
+        wrapper.setOrientation(LinearLayout.VERTICAL);
+        wrapper.addView(top);
+        wrapper.addView(tabs, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        return wrapper;
+    }
+
+    private Button tabButton(String label, int icon, View.OnClickListener listener) {
+        Button b = new Button(this);
+        b.setText(label);
+        b.setTextSize(12);
+        b.setAllCaps(false);
+        b.setCompoundDrawablesWithIntrinsicBounds(0, icon, 0, 0);
+        b.setBackgroundColor(Color.TRANSPARENT);
+        b.setOnClickListener(listener);
+        return b;
+    }
+
+    private void showTab(boolean library) {
+        libraryView.setVisibility(library ? View.VISIBLE : View.GONE);
+        storageView.setVisibility(library ? View.GONE : View.VISIBLE);
+        libraryTab.setTextColor(library ? Ui.blue(this) : Ui.secondary(this));
+        storageTab.setTextColor(library ? Ui.secondary(this) : Ui.blue(this));
+        if (!library) refreshStorage();
+    }
+
+    // ----------------------------------------------------------------- storage
+
+    private View buildStorageView() {
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(16), dp(20), dp(16));
+
+        box.addView(Ui.label(this, "Storage", 18, Ui.primary(this), true));
+        storageSummary = Ui.label(this, "", 12, Ui.secondary(this), false);
+        box.addView(storageSummary);
+
+        box.addView(smallButton("Delete all computed data",
+                new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                confirmDelete("Delete all computed data?",
+                        "Every parsed book will be removed. Copied EPUBs are kept.",
+                        new Runnable() {
+                    @Override public void run() {
+                        Library.clearComputed(MainActivity.this);
+                        refresh();
+                        Toast.makeText(MainActivity.this, "Computed data deleted",
+                                Toast.LENGTH_SHORT).show();
+                    }
+                });
+            }
+        }));
+        box.addView(smallButton("Delete all copied EPUBs",
+                new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                confirmDelete("Delete all copied EPUBs?",
+                        "Only old EPUB copies inside the app are removed. "
+                                + "Computed books stay available.",
+                        new Runnable() {
+                    @Override public void run() {
+                        int n = Library.deleteAllEpubs(MainActivity.this);
+                        refreshStorage();
+                        Toast.makeText(MainActivity.this,
+                                "Deleted " + Ui.num(n) + " EPUB copy/copies",
+                                Toast.LENGTH_SHORT).show();
+                    }
+                });
+            }
+        }));
+        box.addView(Ui.label(this,
+                "New imports keep only extracted text, word data and a small cover. "
+                        + "The original EPUB is never stored.",
+                12, Ui.faint(this), false));
+
+        storageList = new LinearLayout(this);
+        storageList.setOrientation(LinearLayout.VERTICAL);
+        box.addView(storageList);
+        scroll.addView(box);
+        return scroll;
+    }
+
+    private Button smallButton(String label, View.OnClickListener listener) {
+        Button b = new Button(this);
+        b.setText(label);
+        b.setTextSize(12);
+        b.setAllCaps(false);
+        b.setTextColor(Ui.primary(this));
+        b.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        b.setOnClickListener(listener);
+        return b;
+    }
+
+    private void confirmDelete(String title, String message, final Runnable action) {
+        new AlertDialog.Builder(this)
+                .setTitle(title)
+                .setMessage(message)
+                .setPositiveButton("Delete", new DialogInterface.OnClickListener() {
+                    @Override public void onClick(DialogInterface d, int which) { action.run(); }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void refreshStorage() {
+        if (storageSummary == null || storageList == null) return;
+        File dir = Library.booksDir(this);
+        File[] files = dir.listFiles();
+        long epubBytes = 0;
+        int epubCount = 0;
+        if (files != null) {
+            for (File f : files) {
+                if (f.isFile() && f.getName().toLowerCase().endsWith(".epub")) {
+                    epubBytes += f.length();
+                    epubCount++;
+                }
+            }
+        }
+        storageSummary.setText(Ui.num(Library.computedCount(this)) + " parsed books  ·  "
+                + Ui.size(Library.computedBytes(this)) + " computed  ·  "
+                + Ui.num(epubCount) + " copied EPUBs, " + Ui.size(epubBytes)
+                + "  ·  database " + Ui.size(Library.databaseBytes(this)));
+
+        storageList.removeAllViews();
+        HashSet<String> shown = new HashSet<String>();
+        for (Library.BookInfo book : Library.books) {
+            shown.add(book.fileName);
+            storageList.add(storageRow(book));
+            storageList.add(divider());
+        }
+        if (files != null) {
+            Arrays.sort(files, new Comparator<File>() {
+                @Override public int compare(File a, File b) {
+                    return a.getName().compareToIgnoreCase(b.getName());
+                }
+            });
+            for (File f : files) {
+                if (!f.isFile() || !f.getName().toLowerCase().endsWith(".epub")) continue;
+                if (shown.contains(f.getName())) continue;
+                storageList.add(epubRow(f));
+                storageList.add(divider());
+            }
+        }
+    }
+
+    private View storageRow(final Library.BookInfo book) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setPadding(dp(8), dp(10), dp(8), dp(10));
+        row.addView(Ui.label(this, book.title, 14, Ui.primary(this), true));
+
+        File copy = new File(Library.booksDir(this), book.fileName);
+        String detail = book.fileName + "  ·  "
+                + Ui.size(Library.bookBytes(this, book.fileName)) + " computed";
+        if (copy.isFile()) detail += "  ·  " + Ui.size(copy.length()) + " EPUB copy";
+        row.addView(Ui.label(this, detail, 11, Ui.secondary(this), false));
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        Button deleteData = smallButton("Delete data", new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                confirmDelete("Delete computed data?",
+                        "Remove the parsed text, vocabulary and cover for “"
+                                + book.title + "”?",
+                        new Runnable() {
+                    @Override public void run() {
+                        Library.deleteComputed(MainActivity.this, book);
+                        refresh();
+                        Toast.makeText(MainActivity.this, "Computed data deleted",
+                                Toast.LENGTH_SHORT).show();
+                    }
+                });
+            }
+        });
+        deleteData.setLayoutParams(new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        actions.addView(deleteData);
+        if (copy.isFile()) {
+            Button deleteEpub = smallButton("Delete EPUB", new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    deleteEpubFile(book.fileName);
+                }
+            });
+            deleteEpub.setLayoutParams(new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            actions.addView(deleteEpub);
+        }
+        row.addView(actions);
+        return row;
+    }
+
+    private View epubRow(final File file) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.VERTICAL);
+        row.setPadding(dp(8), dp(10), dp(8), dp(10));
+        row.addView(Ui.label(this, file.getName(), 14, Ui.primary(this), true));
+        row.addView(Ui.label(this, Ui.size(file.length())
+                + " copied EPUB  ·  no computed data", 11, Ui.secondary(this), false));
+        Button deleteEpub = smallButton("Delete EPUB", new View.OnClickListener() {
+            @Override public void onClick(View v) { deleteEpubFile(file.getName()); }
+        });
+        deleteEpub.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        row.addView(deleteEpub);
+        return row;
+    }
+
+    private void deleteEpubFile(final String fileName) {
+        confirmDelete("Delete copied EPUB?", "Remove “" + fileName
+                + "” from the app's private storage?", new Runnable() {
+            @Override public void run() {
+                Library.deleteEpub(MainActivity.this, fileName);
+                refreshStorage();
+                Toast.makeText(MainActivity.this, "EPUB copy deleted",
+                        Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+
+    private View divider() {
+        View v = new View(this);
+        v.setBackgroundColor(Ui.dividerColor(this));
+        v.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 1));
+        return v;
+    }
 
     private ImageButton iconButton(int icon, String description,
                                    View.OnClickListener listener) {
@@ -336,6 +606,7 @@ public class MainActivity extends Activity {
         info.setText(Ui.num(Library.books.size()) + " books  ·  "
                 + Ui.num(Library.totalVocab()) + " unique words  ·  showing "
                 + Ui.num(displayed.size()));
+        refreshStorage();
     }
 
     private void pick() {
@@ -378,24 +649,13 @@ public class MainActivity extends Activity {
 
     private void importUris(final List<Uri> uris) {
         final ProgressDialog progress = ProgressDialog.show(this, "Importing",
-                "Copying and parsing " + Ui.num(uris.size()) + " EPUB file(s)…", true, false);
+                "Parsing and storing " + Ui.num(uris.size()) + " EPUB file(s)…", true, false);
         new Thread(new Runnable() {
             @Override public void run() {
                 final int[] added = {0};
                 final Throwable[] failure = new Throwable[1];
                 try {
-                    for (int i = 0; i < uris.size(); i++) {
-                        copyUri(uris.get(i));
-                        final int done = i + 1;
-                        runOnUiThread(new Runnable() {
-                            @Override public void run() {
-                                progress.setMessage("Copying " + Ui.num(done) + " of "
-                                        + Ui.num(uris.size()) + "…");
-                            }
-                        });
-                    }
-                    // Parse only the new files; existing books stay cached.
-                    added[0] = Library.importNew(MainActivity.this);
+                    added[0] = Library.importUris(MainActivity.this, uris);
                 } catch (Throwable e) {
                     failure[0] = e;
                 }
@@ -420,10 +680,7 @@ public class MainActivity extends Activity {
 
     private void rebuild() {
         final ProgressDialog progress = ProgressDialog.show(this, "Reloading",
-                "Parsing your EPUB library…", true, false);
-        // Drop references to the old books before parsing a whole new set.
-        // Otherwise the old vocabulary and cover bitmaps stay live during the
-        // rebuild and can push the process over its heap limit.
+                "Loading stored library…", true, false);
         displayed.clear();
         listAdapter.notifyDataSetChanged();
         gridAdapter.notifyDataSetChanged();
@@ -449,52 +706,5 @@ public class MainActivity extends Activity {
                 });
             }
         }).start();
-    }
-
-    private boolean copyUri(Uri uri) {
-        ContentResolver resolver = getContentResolver();
-        String name = null;
-        Cursor cursor = resolver.query(uri,
-                new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null);
-        if (cursor != null) {
-            try {
-                if (cursor.moveToFirst()) name = cursor.getString(0);
-            } catch (Exception e) {
-                name = null;
-            } finally {
-                cursor.close();
-            }
-        }
-        if (name == null || name.isEmpty()) name = uri.getLastPathSegment();
-        if (name == null || name.isEmpty()) name = "book.epub";
-        name = sanitize(name);
-        if (!name.toLowerCase().endsWith(".epub")) name += ".epub";
-
-        File dir = Library.booksDir(this);
-        if (!dir.exists()) dir.mkdirs();
-        File dst = new File(dir, name);
-        if (dst.exists() && dst.length() > 0) return false;
-
-        InputStream in = null;
-        FileOutputStream out = null;
-        try {
-            in = resolver.openInputStream(uri);
-            if (in == null) return false;
-            out = new FileOutputStream(dst);
-            byte[] buf = new byte[16384];
-            int n;
-            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-            return true;
-        } catch (Exception e) {
-            if (dst.exists()) dst.delete();
-            return false;
-        } finally {
-            try { if (in != null) in.close(); } catch (Exception ignored) { }
-            try { if (out != null) out.close(); } catch (Exception ignored) { }
-        }
-    }
-
-    private static String sanitize(String name) {
-        return name.replaceAll("[^A-Za-z0-9._\\u3000-\\u30ff\\u4e00-\\u9fff-]", "_");
     }
 }

@@ -1,21 +1,20 @@
 package com.buddyapps.jepubvocab;
 
+import android.content.ContentResolver;
 import android.content.Context;
+import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.net.Uri;
+import android.provider.OpenableColumns;
 
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
-import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
 import java.io.Serializable;
 import java.net.URLDecoder;
 import java.util.ArrayList;
@@ -45,11 +44,12 @@ public final class Library {
     private static final int PAGE_CHARS = 1400;
     private static final int MAX_PAGES = 400;
     private static final int MAX_GRAMS = 180;
-    // Bump when parsing changes so old cached vocabularies are rebuilt once.
-    private static final int CACHE_VERSION = 7;
+    // Bump when parsing changes so stored books are rebuilt once. StorageDb
+    // uses this as its schema version, so old rows are dropped automatically.
+    static final int CACHE_VERSION = 7;
     private static final long serialVersionUID = 1L;
 
-    private static File cacheFile;
+    private static StorageDb db;
     private static HashMap<String, Integer> df = new HashMap<String, Integer>();
     private static HashMap<String, Integer> wordDf = new HashMap<String, Integer>();
     private static double[] bookWordNorm = new double[0];
@@ -67,7 +67,54 @@ public final class Library {
 
     private Library() { }
 
-    private static boolean cacheVersionOk(Context c) {
+    private static void ensureDb(Context c) {
+        if (db == null) db = new StorageDb(c);
+    }
+
+    private static void clearCaches() {
+        Ui.clearCovers();
+        allVocab = null;
+        totalVocabCount = -1;
+        bookSimilarCache.clear();
+        similarityMatrix = null;
+        similarTopK = null;
+        df.clear();
+        wordDf.clear();
+        bookSimVocab.clear();
+    }
+
+    /** Loads the already parsed library from SQLite; no EPUB is opened at launch. */
+    public static void load(Context c) {
+        JMDict.load(c);
+        JMNedict.load(c);
+        ensureDb(c);
+        books.clear();
+        ArrayList<BookInfo> stored = db.loadBooks();
+        if (!stored.isEmpty()) {
+            books.addAll(stored);
+        } else if (!migrated(c)) {
+            // One-time upgrade from the old library.bin + copied EPUBs layout.
+            migrateLegacy(c);
+            markMigrated(c);
+        }
+        prepare();
+    }
+
+    private static File migrationMarker(Context c) {
+        return new File(c.getFilesDir(), "storage.migrated");
+    }
+
+    private static boolean migrated(Context c) {
+        return migrationMarker(c).exists();
+    }
+
+    private static void markMigrated(Context c) {
+        try {
+            migrationMarker(c).createNewFile();
+        } catch (Throwable ignored) { }
+    }
+
+    private static boolean legacyVersionOk(Context c) {
         File marker = new File(c.getFilesDir(), "library.version");
         if (!marker.exists()) return false;
         try {
@@ -82,16 +129,13 @@ public final class Library {
         }
     }
 
-    public static void load(Context c) {
-        JMDict.load(c);
-        JMNedict.load(c);
-        cacheFile = new File(c.getFilesDir(), "library.bin");
-        books.clear();
-        boolean cacheOk = cacheVersionOk(c);
-        if (cacheOk && cacheFile.exists()) {
+    /** Moves an existing v1.34 library into SQLite once, then retires library.bin. */
+    private static void migrateLegacy(Context c) {
+        File cache = new File(c.getFilesDir(), "library.bin");
+        if (cache.exists() && legacyVersionOk(c)) {
             try {
-                ObjectInputStream in = new ObjectInputStream(
-                        new BufferedInputStream(new FileInputStream(cacheFile), 65536));
+                DataInputStream in = new DataInputStream(
+                        new FileInputStream(cache));
                 try {
                     Object o = in.readObject();
                     if (o instanceof List) {
@@ -99,38 +143,18 @@ public final class Library {
                             if (x instanceof BookInfo) books.add((BookInfo) x);
                         }
                     }
-                    cacheOk = true;
                 } finally {
                     in.close();
                 }
             } catch (Throwable e) {
-                // A cache left half-written by a crash is safe to ignore.
                 books.clear();
-                cacheOk = false;
             }
         }
-        // An import can crash after copying its EPUBs but before saving the cache.
-        // Parse only the missing files instead of the entire library on next launch.
-        SyncResult sync = syncWithDisk(c);
-        boolean authorsChanged = ensureAuthors(c);
-        if (!cacheOk || sync.changed || authorsChanged) {
-            prepare();
-            save();
-        } else {
-            prepare();
-        }
-    }
-
-    /** Adds EPUBs that were copied to disk after the cache was last saved. */
-    public static int importNew(Context c) {
-        if (cacheFile == null) cacheFile = new File(c.getFilesDir(), "library.bin");
-        SyncResult sync = syncWithDisk(c);
-        boolean authorsChanged = ensureAuthors(c);
-        if (sync.changed || authorsChanged) {
-            prepare();
-            save();
-        }
-        return sync.added;
+        // An import could have copied EPUBs but crashed before writing the cache.
+        syncWithDisk(c);
+        if (!books.isEmpty()) db.saveBooks(books);
+        cache.delete();
+        new File(c.getFilesDir(), "library.version").delete();
     }
 
     private static final class SyncResult {
@@ -138,10 +162,10 @@ public final class Library {
         boolean changed;
     }
 
-    /** Reconciles the in-memory library with the EPUB files in private storage. */
+    /** Used only by the one-time migration from copied EPUB files. */
     private static SyncResult syncWithDisk(Context c) {
         SyncResult result = new SyncResult();
-        File dir = new File(c.getFilesDir(), "books");
+        File dir = booksDir(c);
         if (!dir.exists()) dir.mkdirs();
         HashSet<String> known = new HashSet<String>();
         for (BookInfo b : books) known.add(b.fileName);
@@ -164,62 +188,169 @@ public final class Library {
                 }
             }
         }
-        for (int i = books.size() - 1; i >= 0; i--) {
-            File f = new File(dir, books.get(i).fileName);
-            if (!f.isFile() || f.length() == 0) {
-                books.remove(i);
-                result.changed = true;
-            }
-        }
         return result;
     }
 
+    /**
+     * Parses picked EPUBs straight from their content URIs and stores only the
+     * extracted text, vocabulary and resized cover. The source file is staged
+     * in the cache directory just for the parse, then deleted.
+     */
+    public static synchronized int importUris(Context c, List<Uri> uris) {
+        ensureDb(c);
+        HashSet<String> known = new HashSet<String>();
+        for (BookInfo b : books) known.add(b.fileName);
+        int added = 0;
+        for (int i = 0; i < uris.size(); i++) {
+            Uri uri = uris.get(i);
+            String name = sanitize(displayName(c, uri));
+            if (!name.toLowerCase().endsWith(".epub")) name += ".epub";
+            if (known.contains(name)) continue;
+            File tmp = new File(c.getCacheDir(),
+                    "import_" + System.currentTimeMillis() + "_" + i + ".epub");
+            try {
+                if (!streamToFile(c, uri, tmp)) continue;
+                BookInfo book = parseEpub(tmp, name, System.currentTimeMillis());
+                if (book != null) {
+                    books.add(book);
+                    known.add(name);
+                    added++;
+                }
+            } catch (Throwable e) {
+                // One bad file must not abort the rest of the import.
+            } finally {
+                tmp.delete();
+            }
+        }
+        if (added > 0) {
+            clearCaches();
+            prepare();
+            db.saveBooks(books);
+            markMigrated(c);
+        }
+        return added;
+    }
+
+    private static String displayName(Context c, Uri uri) {
+        String name = null;
+        ContentResolver resolver = c.getContentResolver();
+        Cursor cursor = resolver.query(uri,
+                new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null);
+        if (cursor != null) {
+            try {
+                if (cursor.moveToFirst()) name = cursor.getString(0);
+            } catch (Throwable e) {
+                name = null;
+            } finally {
+                cursor.close();
+            }
+        }
+        if (name == null || name.isEmpty()) name = uri.getLastPathSegment();
+        return name == null || name.isEmpty() ? "book.epub" : name;
+    }
+
+    private static String sanitize(String name) {
+        return name.replaceAll("[^A-Za-z0-9._\\u3000-\\u30ff\\u4e00-\\u9fff-]", "_");
+    }
+
+    private static boolean streamToFile(Context c, Uri uri, File dst) {
+        InputStream in = null;
+        FileOutputStream out = null;
+        try {
+            in = c.getContentResolver().openInputStream(uri);
+            if (in == null) return false;
+            out = new FileOutputStream(dst);
+            byte[] buf = new byte[32768];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            return dst.length() > 0;
+        } catch (Throwable e) {
+            return false;
+        } finally {
+            try { if (in != null) in.close(); } catch (Exception ignored) { }
+            try { if (out != null) out.close(); } catch (Exception ignored) { }
+        }
+    }
+
+    /** Reloads the stored library and recomputes derived indexes. */
     public static void rebuild(Context c) {
         JMDict.load(c);
         JMNedict.load(c);
-        cacheFile = new File(c.getFilesDir(), "library.bin");
-        Ui.clearCovers();
-        allVocab = null;
-        totalVocabCount = -1;
-        bookSimilarCache.clear();
-        similarityMatrix = null;
-        similarTopK = null;
-        df.clear();
-        wordDf.clear();
-        bookSimVocab.clear();
+        ensureDb(c);
+        clearCaches();
         books.clear();
-        File dir = new File(c.getFilesDir(), "books");
-        if (dir.exists()) {
-            File[] files = dir.listFiles();
-            if (files != null) {
-                Arrays.sort(files, new Comparator<File>() {
-                    @Override public int compare(File a, File b) {
-                        return a.getName().compareToIgnoreCase(b.getName());
-                    }
-                });
-                for (File f : files) {
-                    if (f.isFile() && f.getName().toLowerCase().endsWith(".epub")) {
-                        BookInfo book = parseEpub(f);
-                        if (book != null) books.add(book);
-                    }
-                }
-            }
-        }
+        books.addAll(db.loadBooks());
         prepare();
-        save();
     }
 
     public static void deleteBook(Context c, BookInfo book) {
-        File dir = new File(c.getFilesDir(), "books");
-        File f = new File(dir, book.fileName);
-        if (f.exists()) f.delete();
+        ensureDb(c);
         books.remove(book);
+        db.delete(book.fileName);
+        File f = new File(booksDir(c), book.fileName);
+        if (f.exists()) f.delete();
+        clearCaches();
         prepare();
-        save();
+    }
+
+    /** Removes computed data for one book but leaves any copied EPUB untouched. */
+    public static void deleteComputed(Context c, BookInfo book) {
+        ensureDb(c);
+        books.remove(book);
+        db.delete(book.fileName);
+        clearCaches();
+        prepare();
+    }
+
+    /** Removes all computed data; copied EPUBs can still be imported again. */
+    public static void clearComputed(Context c) {
+        ensureDb(c);
+        books.clear();
+        db.clear();
+        clearCaches();
+        prepare();
+    }
+
+    public static boolean deleteEpub(Context c, String fileName) {
+        File f = new File(booksDir(c), fileName);
+        return f.isFile() && f.delete();
+    }
+
+    public static int deleteAllEpubs(Context c) {
+        File dir = booksDir(c);
+        File[] files = dir.listFiles();
+        int deleted = 0;
+        if (files != null) {
+            for (File f : files) {
+                if (f.isFile() && f.getName().toLowerCase().endsWith(".epub") && f.delete()) {
+                    deleted++;
+                }
+            }
+        }
+        return deleted;
     }
 
     public static File booksDir(Context c) {
         return new File(c.getFilesDir(), "books");
+    }
+
+    public static long computedBytes(Context c) {
+        ensureDb(c);
+        return db.dataBytes();
+    }
+
+    public static long bookBytes(Context c, String fileName) {
+        ensureDb(c);
+        return db.bytes(fileName);
+    }
+
+    public static int computedCount(Context c) {
+        ensureDb(c);
+        return db.count();
+    }
+
+    public static long databaseBytes(Context c) {
+        return new File(c.getFilesDir(), "mokuroku.db").length();
     }
 
     /** Unique word count; prepared once per library change, not per screen refresh. */
@@ -293,35 +424,6 @@ public final class Library {
             }
         });
         return out;
-    }
-
-    private static void save() {
-        if (cacheFile == null) return;
-        File tmp = new File(cacheFile.getParentFile(), "library.bin.tmp");
-        try {
-            ObjectOutputStream out = new ObjectOutputStream(
-                    new BufferedOutputStream(new FileOutputStream(tmp), 65536));
-            try {
-                out.writeObject(books);
-            } finally {
-                out.close();
-            }
-            // Only replace the live cache once the new file is complete: a crash
-            // mid-write must never leave a truncated library.bin for next launch.
-            if (!tmp.renameTo(cacheFile)) {
-                if (cacheFile.exists()) cacheFile.delete();
-                if (!tmp.renameTo(cacheFile)) tmp.delete();
-            }
-            File marker = new File(cacheFile.getParentFile(), "library.version");
-            DataOutputStream version = new DataOutputStream(new FileOutputStream(marker));
-            try {
-                version.writeInt(CACHE_VERSION);
-            } finally {
-                version.close();
-            }
-        } catch (Throwable e) {
-            tmp.delete();
-        }
     }
 
     /** Recomputes inverse document frequencies and book indexes. */
@@ -594,36 +696,11 @@ public final class Library {
         return author.replaceAll("\\s+", " ").trim();
     }
 
-    /** Fills in authors for books cached before author metadata was supported. */
-    private static boolean ensureAuthors(Context c) {
-        File dir = new File(c.getFilesDir(), "books");
-        boolean changed = false;
-        for (BookInfo b : books) {
-            if (b.author != null && !b.author.trim().isEmpty()) continue;
-            File file = new File(dir, b.fileName);
-            try {
-                ZipFile zip = new ZipFile(file);
-                try {
-                    String opfPath = findOpfPath(zip);
-                    byte[] data = opfPath == null ? null : readEntry(zip, opfPath);
-                    if (data != null) {
-                        String author = firstCreator(new String(data, "UTF-8"));
-                        if (!author.isEmpty()) {
-                            b.author = author;
-                            changed = true;
-                        }
-                    }
-                } finally {
-                    zip.close();
-                }
-            } catch (Throwable e) {
-                // Missing/unreadable metadata is fine; the book still works.
-            }
-        }
-        return changed;
+    private static BookInfo parseEpub(File file) {
+        return parseEpub(file, file.getName(), file.lastModified());
     }
 
-    private static BookInfo parseEpub(File file) {
+    private static BookInfo parseEpub(File file, String fileName, long addedAt) {
         try {
             ZipFile zip = new ZipFile(file);
             try {
@@ -639,7 +716,7 @@ public final class Library {
                 if (tm.find()) {
                     title = htmlToText(tm.group(1)).trim();
                 }
-                if (title.isEmpty()) title = stripExtension(file.getName());
+                if (title.isEmpty()) title = stripExtension(fileName);
 
                 String opfDir = opfPath.contains("/")
                         ? opfPath.substring(0, opfPath.lastIndexOf('/')) : "";
@@ -689,8 +766,8 @@ public final class Library {
                 BookInfo book = new BookInfo();
                 book.title = title;
                 book.author = firstCreator(opf);
-                book.fileName = file.getName();
-                book.addedAt = file.lastModified();
+                book.fileName = fileName;
+                book.addedAt = addedAt;
                 String fullText = all.toString();
                 computeTextStats(fullText, book);
                 book.cover = extractCover(zip, opf, opfDir, manifest);

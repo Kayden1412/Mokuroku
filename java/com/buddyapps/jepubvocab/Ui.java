@@ -88,6 +88,15 @@ final class Ui {
         return String.format(Locale.US, "%.1f", value);
     }
 
+    /** Compact byte count for the Storage tab. */
+    static String size(long bytes) {
+        if (bytes >= 1024L * 1024L) {
+            return String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0));
+        }
+        if (bytes >= 1024L) return (bytes / 1024) + " KB";
+        return bytes + " B";
+    }
+
     /** A compact Lucide icon button, tinted for the current theme. */
     static ImageButton iconButton(Context c, int icon, String description,
                                   View.OnClickListener listener) {
