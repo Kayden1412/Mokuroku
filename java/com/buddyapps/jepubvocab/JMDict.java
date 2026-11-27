@@ -26,6 +26,7 @@ final class JMDict {
         final List<String> partsOfSpeech;
         final List<String> glosses;
         final int conditions;
+        final boolean contentWord;
 
         Entry(String word, String reading, String[] pos, String[] glosses) {
             this.word = word;
@@ -33,6 +34,7 @@ final class JMDict {
             this.partsOfSpeech = Arrays.asList(pos);
             this.glosses = Arrays.asList(glosses);
             this.conditions = conditionsFor(pos);
+            this.contentWord = hasContentPos(pos);
         }
     }
 
@@ -79,6 +81,37 @@ final class JMDict {
 
     static boolean contains(String form) {
         return byForm != null && form != null && byForm.containsKey(form);
+    }
+
+    /**
+     * Resolves a surface token to its dictionary base form for similarity
+     * comparison, or returns null if JMdict classifies it purely as a
+     * non-content word (pronoun, particle, conjunction, interjection,
+     * auxiliary, copula, prefix/suffix, numeric). Unknown tokens stay as-is.
+     */
+    static String similarityForm(String word) {
+        if (byForm == null || word == null || word.isEmpty()) return word;
+        List<Hit> hits = exact(word);
+        if (hits.isEmpty()) return word;
+        for (Hit h : hits) {
+            if (h.entry.contentWord) return h.entry.word;
+        }
+        return null;
+    }
+
+    private static boolean hasContentPos(String[] pos) {
+        if (pos == null || pos.length == 0) return true;
+        for (String p : pos) {
+            if (p.equals("particle") || p.equals("conjunction")
+                    || p.equals("interjection (kandoushi)") || p.equals("copula")
+                    || p.equals("pronoun") || p.equals("prefix") || p.equals("suffix")
+                    || p.equals("numeric") || p.startsWith("auxiliary")
+                    || p.startsWith(" ")) {
+                continue;
+            }
+            return true;
+        }
+        return false;
     }
 
     static List<Hit> lookup(String text) {

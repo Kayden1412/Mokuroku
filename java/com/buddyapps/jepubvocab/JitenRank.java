@@ -16,7 +16,8 @@ import java.util.Map;
  */
 final class JitenRank {
 
-    private static final int DEFAULT_RANK = 200000;
+    private static final int DEFAULT_RANK = 100000;
+    private static final int OOV_RANK = 30000;
 
     private static Map<String, Integer> ranks;
 
@@ -47,7 +48,8 @@ final class JitenRank {
     static int rank(String word) {
         if (ranks == null || word == null) return DEFAULT_RANK;
         Integer r = ranks.get(word);
-        return r == null ? DEFAULT_RANK : r;
+        if (r != null) return r;
+        return JMDict.contains(word) ? DEFAULT_RANK : OOV_RANK;
     }
 
     static double weight(String word) {

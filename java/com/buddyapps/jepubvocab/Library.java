@@ -54,6 +54,7 @@ public final class Library {
     private static HashMap<String, Integer> wordDf = new HashMap<String, Integer>();
     private static double[] bookWordNorm = new double[0];
     private static double[] bookGramNorm = new double[0];
+    private static List<Map<String, Integer>> bookSimVocab = new ArrayList<Map<String, Integer>>();
     private static final HashMap<Integer, List<SimilarInfo>> bookSimilarCache =
             new HashMap<Integer, List<SimilarInfo>>();
     private static int totalVocabCount = -1;
@@ -285,23 +286,29 @@ public final class Library {
     private static void prepare() {
         df = new HashMap<String, Integer>();
         wordDf = new HashMap<String, Integer>();
+        HashSet<String> rawVocabSet = new HashSet<String>();
+        HashMap<String, String> lemmaCache = new HashMap<String, String>();
+        bookSimVocab = new ArrayList<Map<String, Integer>>(books.size());
         for (int i = 0; i < books.size(); i++) {
             BookInfo b = books.get(i);
             b.index = i;
+            Map<String, Integer> simVocab = toSimilarityVocab(b.vocabMap, lemmaCache);
+            bookSimVocab.add(simVocab);
             for (String g : b.grams.keySet()) {
                 Integer old = df.get(g);
                 df.put(g, old == null ? 1 : old + 1);
             }
-            for (String w : b.vocabMap.keySet()) {
+            for (String w : simVocab.keySet()) {
                 Integer old = wordDf.get(w);
                 wordDf.put(w, old == null ? 1 : old + 1);
             }
+            rawVocabSet.addAll(b.vocabMap.keySet());
         }
         bookWordNorm = new double[books.size()];
         bookGramNorm = new double[books.size()];
         for (int i = 0; i < books.size(); i++) {
             BookInfo b = books.get(i);
-            for (Map.Entry<String, Integer> e : b.vocabMap.entrySet()) {
+            for (Map.Entry<String, Integer> e : bookSimVocab.get(i).entrySet()) {
                 double w = wordWeight(e.getKey(), e.getValue());
                 bookWordNorm[i] += w * w;
             }
@@ -315,22 +322,47 @@ public final class Library {
         bookSimilarCache.clear();
         similarityMatrix = null;
         similarTopK = null;
-        totalVocabCount = wordDf.size();
+        totalVocabCount = rawVocabSet.size();
         allVocab = null;
+    }
+
+    private static Map<String, Integer> toSimilarityVocab(
+            Map<String, Integer> raw, Map<String, String> lemmaCache) {
+        HashMap<String, Integer> out = new HashMap<String, Integer>(raw.size());
+        for (Map.Entry<String, Integer> e : raw.entrySet()) {
+            String key = e.getKey();
+            String base;
+            if (lemmaCache != null && lemmaCache.containsKey(key)) {
+                base = lemmaCache.get(key);
+            } else {
+                base = JMDict.similarityForm(key);
+                if (lemmaCache != null) lemmaCache.put(key, base);
+            }
+            if (base == null || base.length() < 2 || STOP.contains(base) || JMNedict.isName(base)) {
+                continue;
+            }
+            Integer old = out.get(base);
+            out.put(base, old == null ? e.getValue() : old + e.getValue());
+        }
+        return out;
+    }
+
+    private static double tf(int count) {
+        return count <= 0 ? 0.0 : 1.0 + Math.log(count);
     }
 
     private static double weight(String gram, int count) {
         Integer d = df.get(gram);
         int docFreq = d == null ? 0 : d;
         double idf = Math.log((books.size() + 1.0) / (docFreq + 1.0)) + 1.0;
-        return count * idf;
+        return tf(count) * idf;
     }
 
     private static double wordWeight(String word, int count) {
         Integer d = wordDf.get(word);
         int docFreq = d == null ? 0 : d;
         double idf = Math.log((books.size() + 1.0) / (docFreq + 1.0)) + 1.0;
-        return count * idf * JitenRank.weight(word);
+        return tf(count) * idf * JitenRank.weight(word);
     }
 
     private static double cosine(double dot, double na, double nb) {
@@ -342,22 +374,31 @@ public final class Library {
     }
 
     /**
-     * Blend rank-weighted vocabulary overlap with character-pattern overlap.
-     * The other book's norms are cached in prepare(), so this stays fast even
-     * when a page is compared against a large library.
+     * Blend rank-weighted content-lemma overlap (sublinear TF) with
+     * character-pattern overlap. Low shared-word counts are damped so a
+     * single coincidental word cannot dominate short-text matches.
      */
     private static double matchScore(Map<String, Integer> vocabA,
                                      Map<String, Integer> gramsA,
                                      BookInfo other) {
         if (books.size() < 2) return 0.0;
+        int i = other.index;
+        Map<String, Integer> otherVocab = i < bookSimVocab.size()
+                ? bookSimVocab.get(i) : other.vocabMap;
         double wordDot = 0.0;
         double wordNorm = 0.0;
+        int shared = 0;
         for (Map.Entry<String, Integer> e : vocabA.entrySet()) {
             double w = wordWeight(e.getKey(), e.getValue());
             wordNorm += w * w;
-            Integer count = other.vocabMap.get(e.getKey());
-            if (count != null) wordDot += w * wordWeight(e.getKey(), count);
+            Integer count = otherVocab.get(e.getKey());
+            if (count != null) {
+                wordDot += w * wordWeight(e.getKey(), count);
+                shared++;
+            }
         }
+        double wordCos = cosine(wordDot, wordNorm, bookWordNorm[i]);
+        if (shared < 3) wordCos *= shared / 3.0;
         double gramDot = 0.0;
         double gramNorm = 0.0;
         for (Map.Entry<String, Integer> e : gramsA.entrySet()) {
@@ -366,9 +407,7 @@ public final class Library {
             Integer count = other.grams.get(e.getKey());
             if (count != null) gramDot += w * weight(e.getKey(), count);
         }
-        int i = other.index;
-        return 0.7 * cosine(wordDot, wordNorm, bookWordNorm[i])
-                + 0.3 * cosine(gramDot, gramNorm, bookGramNorm[i]);
+        return 0.7 * wordCos + 0.3 * cosine(gramDot, gramNorm, bookGramNorm[i]);
     }
 
     /**
@@ -381,8 +420,10 @@ public final class Library {
         double[][] m = new double[n][n];
         for (int i = 0; i < n; i++) {
             BookInfo a = books.get(i);
+            Map<String, Integer> simA = i < bookSimVocab.size()
+                    ? bookSimVocab.get(i) : a.vocabMap;
             for (int j = i + 1; j < n; j++) {
-                double score = matchScore(a.vocabMap, a.grams, books.get(j));
+                double score = matchScore(simA, a.grams, books.get(j));
                 m[i][j] = score;
                 m[j][i] = score;
             }
@@ -420,29 +461,36 @@ public final class Library {
                 if (j == source.index) { candidates.add(i); break; }
             }
         }
+        Map<String, Integer> srcSim = source.index < bookSimVocab.size()
+                ? bookSimVocab.get(source.index) : source.vocabMap;
         ArrayList<SimilarInfo> out = new ArrayList<SimilarInfo>(candidates.size());
         for (int j : candidates) {
             out.add(new SimilarInfo(j, matrix[source.index][j], null));
         }
         Collections.sort(out);
         for (SimilarInfo s : out) {
-            s.shared = sharedWords(source.vocabMap, books.get(s.bookIndex).vocabMap);
+            Map<String, Integer> otherSim = s.bookIndex < bookSimVocab.size()
+                    ? bookSimVocab.get(s.bookIndex) : books.get(s.bookIndex).vocabMap;
+            s.shared = sharedWords(srcSim, otherSim);
         }
         bookSimilarCache.put(source.index, out);
         return out;
     }
 
     public static List<SimilarInfo> similarToPage(PageInfo page, BookInfo source) {
+        Map<String, Integer> pageSim = toSimilarityVocab(page.vocab, null);
         ArrayList<SimilarInfo> out = new ArrayList<SimilarInfo>();
         for (BookInfo other : books) {
             if (other.index == source.index) continue;
-            double score = matchScore(page.vocab, page.grams, other);
+            double score = matchScore(pageSim, page.grams, other);
             out.add(new SimilarInfo(other.index, score, null));
         }
         Collections.sort(out);
         if (out.size() > 5) out = new ArrayList<SimilarInfo>(out.subList(0, 5));
         for (SimilarInfo s : out) {
-            s.shared = sharedWords(page.vocab, books.get(s.bookIndex).vocabMap);
+            Map<String, Integer> otherSim = s.bookIndex < bookSimVocab.size()
+                    ? bookSimVocab.get(s.bookIndex) : books.get(s.bookIndex).vocabMap;
+            s.shared = sharedWords(pageSim, otherSim);
         }
         return out;
     }

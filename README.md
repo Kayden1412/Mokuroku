@@ -49,8 +49,9 @@ The signed APK appears at `build/app.apk`.
 - Text is stripped of markup, split into ~1400-character pages, and tokenized with
   a lightweight Japanese script-boundary tokenizer (kanji + okurigana, hiragana,
   katakana). Common particles are filtered out.
-- Similarity blends rank-weighted TF-IDF cosine over shared vocabulary (Jiten
-  global ranks: rarer words count more) with TF-IDF cosine over Japanese character
-  bigrams. Common words are omitted from the shared-word list.
+- Similarity blends sublinear-TF (`1 + ln(count)`), rank-weighted TF-IDF
+  cosine over deinflected content words (JMdict POS filtering + Jiten global
+  ranks, with low-overlap damping) and sublinear-TF Japanese character bigrams.
+  Common words are omitted from the shared-word list.
 - Parsed books are cached so later launches start quickly. Use **Reload** after
   replacing files. Cover images are downscaled to 360×480 JPEGs to keep the app small.
