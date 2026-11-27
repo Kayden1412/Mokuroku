@@ -55,6 +55,8 @@ public final class Library {
     private static double[] bookGramNorm = new double[0];
     private static final HashMap<Integer, List<SimilarInfo>> bookSimilarCache =
             new HashMap<Integer, List<SimilarInfo>>();
+    private static int totalVocabCount = -1;
+    private static ArrayList<VocabEntry> allVocab;
 
     private Library() { }
 
@@ -80,7 +82,7 @@ public final class Library {
         if (cacheOk && cacheFile.exists()) {
             try {
                 ObjectInputStream in = new ObjectInputStream(
-                        new BufferedInputStream(new FileInputStream(cacheFile)));
+                        new BufferedInputStream(new FileInputStream(cacheFile), 65536));
                 try {
                     Object o = in.readObject();
                     if (o instanceof List) {
@@ -200,10 +202,44 @@ public final class Library {
         return new File(c.getFilesDir(), "books");
     }
 
+    /** Unique word count; prepared once per library change, not per screen refresh. */
     public static int totalVocab() {
-        HashSet<String> all = new HashSet<String>();
-        for (BookInfo b : books) all.addAll(b.vocabMap.keySet());
-        return all.size();
+        return totalVocabCount < 0 ? 0 : totalVocabCount;
+    }
+
+    /**
+     * Vocabulary merged across every book, sorted by total frequency. Built
+     * lazily (it is large) and cached until the library changes.
+     */
+    public static synchronized ArrayList<VocabEntry> allVocabulary() {
+        if (allVocab != null) return allVocab;
+        HashMap<String, Integer> counts = new HashMap<String, Integer>();
+        HashMap<String, String> snippets = new HashMap<String, String>();
+        for (BookInfo b : books) {
+            for (VocabEntry v : b.vocab) {
+                Integer old = counts.get(v.word);
+                counts.put(v.word, old == null ? v.count : old + v.count);
+                if (!snippets.containsKey(v.word)) {
+                    String s = b.snippets.get(v.word);
+                    snippets.put(v.word, s == null ? v.snippet : s);
+                }
+            }
+        }
+        final Map<String, Integer> c = counts;
+        ArrayList<String> words = new ArrayList<String>(counts.keySet());
+        Collections.sort(words, new Comparator<String>() {
+            @Override public int compare(String a, String b) {
+                int n = c.get(b).compareTo(c.get(a));
+                return n != 0 ? n : a.compareTo(b);
+            }
+        });
+        ArrayList<VocabEntry> entries = new ArrayList<VocabEntry>(words.size());
+        for (String w : words) {
+            String s = snippets.get(w);
+            entries.add(new VocabEntry(w, c.get(w), s == null ? "" : s));
+        }
+        allVocab = entries;
+        return entries;
     }
 
     private static void save() {
@@ -211,7 +247,7 @@ public final class Library {
         File tmp = new File(cacheFile.getParentFile(), "library.bin.tmp");
         try {
             ObjectOutputStream out = new ObjectOutputStream(
-                    new BufferedOutputStream(new FileOutputStream(tmp)));
+                    new BufferedOutputStream(new FileOutputStream(tmp), 65536));
             try {
                 out.writeObject(books);
             } finally {
@@ -267,6 +303,8 @@ public final class Library {
         // Book indexes can change when books are added or removed.
         Ui.clearCovers();
         bookSimilarCache.clear();
+        totalVocabCount = wordDf.size();
+        allVocab = null;
     }
 
     private static double weight(String gram, int count) {
