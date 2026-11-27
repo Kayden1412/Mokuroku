@@ -379,8 +379,8 @@ public class MainActivity extends Activity {
         HashSet<String> shown = new HashSet<String>();
         for (Library.BookInfo book : Library.books) {
             shown.add(book.fileName);
-            storageList.add(storageRow(book));
-            storageList.add(divider());
+            storageList.addView(storageRow(book));
+            storageList.addView(divider());
         }
         if (files != null) {
             Arrays.sort(files, new Comparator<File>() {
@@ -391,8 +391,8 @@ public class MainActivity extends Activity {
             for (File f : files) {
                 if (!f.isFile() || !f.getName().toLowerCase().endsWith(".epub")) continue;
                 if (shown.contains(f.getName())) continue;
-                storageList.add(epubRow(f));
-                storageList.add(divider());
+                storageList.addView(epubRow(f));
+                storageList.addView(divider());
             }
         }
     }

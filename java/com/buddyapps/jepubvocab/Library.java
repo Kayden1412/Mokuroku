@@ -15,6 +15,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.ObjectInputStream;
 import java.io.Serializable;
 import java.net.URLDecoder;
 import java.util.ArrayList;
@@ -134,7 +135,7 @@ public final class Library {
         File cache = new File(c.getFilesDir(), "library.bin");
         if (cache.exists() && legacyVersionOk(c)) {
             try {
-                DataInputStream in = new DataInputStream(
+                ObjectInputStream in = new ObjectInputStream(
                         new FileInputStream(cache));
                 try {
                     Object o = in.readObject();
