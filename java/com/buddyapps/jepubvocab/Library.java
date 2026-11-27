@@ -799,86 +799,197 @@ public final class Library {
         return i > 0 ? name.substring(0, i) : name;
     }
 
-    private static final Pattern ENTITY = Pattern.compile(
-            "&(#x[0-9a-fA-F]+|#[0-9]+|nbsp|amp|lt|gt|quot|apos|mdash|ndash|hellip);",
-            Pattern.CASE_INSENSITIVE);
+    private static boolean matchesIgnoreCase(String s, int from, String name) {
+        if (from < 0 || from + name.length() > s.length()) return false;
+        for (int k = 0; k < name.length(); k++) {
+            char a = s.charAt(from + k);
+            char b = name.charAt(k);
+            if (a >= 'A' && a <= 'Z') a = (char) (a + 32);
+            if (b >= 'A' && b <= 'Z') b = (char) (b + 32);
+            if (a != b) return false;
+        }
+        return true;
+    }
 
-    private static String decodeEntities(String s) {
-        Matcher m = ENTITY.matcher(s);
-        StringBuffer out = new StringBuffer();
-        while (m.find()) {
-            String token = m.group(1);
-            String rep = "";
+    private static boolean tagIs(String s, int from, int to, String name) {
+        return to - from == name.length() && matchesIgnoreCase(s, from, name);
+    }
+
+    private static int tagEnd(String s, int from) {
+        int limit = Math.min(s.length(), from + 160);
+        for (int i = from; i < limit; i++) if (s.charAt(i) == '>') return i;
+        return -1;
+    }
+
+    private static int skipBlock(String s, int from, String tag) {
+        int n = s.length();
+        for (int i = from; i < n - 1; i++) {
+            if (s.charAt(i) == '<' && s.charAt(i + 1) == '/') {
+                int p = i + 2;
+                while (p < n && Character.isWhitespace(s.charAt(p))) p++;
+                if (matchesIgnoreCase(s, p, tag)) {
+                    int q = p + tag.length();
+                    while (q < n && s.charAt(q) != '>') q++;
+                    if (q < n) return q + 1;
+                }
+            }
+        }
+        return n;
+    }
+
+    private static boolean isBlockTag(String s, int from, int to) {
+        if (tagIs(s, from, to, "p") || tagIs(s, from, to, "div")
+                || tagIs(s, from, to, "li") || tagIs(s, from, to, "tr")
+                || tagIs(s, from, to, "section") || tagIs(s, from, to, "blockquote")
+                || tagIs(s, from, to, "article")) return true;
+        return to - from == 2 && (s.charAt(from) == 'h' || s.charAt(from) == 'H')
+                && s.charAt(from + 1) >= '1' && s.charAt(from + 1) <= '6';
+    }
+
+    private static String entityText(String token) {
+        if (token.startsWith("#x") || token.startsWith("#X")) {
             try {
-                if (token.startsWith("#x")) {
-                    rep = String.valueOf((char) Integer.parseInt(token.substring(2), 16));
-                } else if (token.startsWith("#")) {
-                    rep = String.valueOf((char) Integer.parseInt(token.substring(1)));
-                } else if (token.equalsIgnoreCase("nbsp")) {
-                    rep = " ";
-                } else if (token.equalsIgnoreCase("amp")) {
-                    rep = "&";
-                } else if (token.equalsIgnoreCase("lt")) {
-                    rep = "<";
-                } else if (token.equalsIgnoreCase("gt")) {
-                    rep = ">";
-                } else if (token.equalsIgnoreCase("quot")) {
-                    rep = "\"";
-                } else if (token.equalsIgnoreCase("apos")) {
-                    rep = "'";
-                } else if (token.equalsIgnoreCase("mdash")) {
-                    rep = "—";
-                } else if (token.equalsIgnoreCase("ndash")) {
-                    rep = "–";
-                } else if (token.equalsIgnoreCase("hellip")) {
-                    rep = "…";
-                }
-            } catch (Exception e) {
-                rep = m.group(0);
-            }
-            m.appendReplacement(out, Matcher.quoteReplacement(rep));
+                int v = Integer.parseInt(token.substring(2), 16);
+                return v > 0 && v <= 0xFFFF ? String.valueOf((char) v) : null;
+            } catch (Exception e) { return null; }
         }
-        m.appendTail(out);
-        return out.toString();
+        if (token.startsWith("#")) {
+            try {
+                int v = Integer.parseInt(token.substring(1));
+                return v > 0 && v <= 0xFFFF ? String.valueOf((char) v) : null;
+            } catch (Exception e) { return null; }
+        }
+        if (token.equalsIgnoreCase("nbsp")) return " ";
+        if (token.equalsIgnoreCase("amp")) return "&";
+        if (token.equalsIgnoreCase("lt")) return "<";
+        if (token.equalsIgnoreCase("gt")) return ">";
+        if (token.equalsIgnoreCase("quot")) return "\"";
+        if (token.equalsIgnoreCase("apos")) return "'";
+        if (token.equalsIgnoreCase("mdash")) return "—";
+        if (token.equalsIgnoreCase("ndash")) return "–";
+        if (token.equalsIgnoreCase("hellip")) return "…";
+        return null;
     }
 
-    // Full-width ASCII (Ａ-Ｚ, ａ-ｚ, ０-９ and ！？ etc.) folds onto the same
-    // tokens as their half-width forms. Do this before stats and tokenizing so
-    // page text, dialogue counts and vocabulary all agree.
-    private static String normalizeWidth(String s) {
-        StringBuilder out = null;
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            char n = (c >= '\uFF01' && c <= '\uFF5E') ? (char) (c - 0xFEE0) : c;
-            if (n == c) {
-                if (out != null) out.append(c);
-            } else {
-                if (out == null) {
-                    out = new StringBuilder(s.length());
-                    out.append(s, 0, i);
-                }
-                out.append(n);
-            }
+    private static void appendNewline(StringBuilder out) {
+        int len = out.length();
+        if (len == 0) return;
+        if (out.charAt(len - 1) != '\n') {
+            out.append('\n');
+        } else if (len < 2 || out.charAt(len - 2) != '\n') {
+            // Keep at most one blank line, matching the old \n{3,} -> \n\n rule.
+            out.append('\n');
         }
-        return out == null ? s : out.toString();
     }
 
+    // Single pass: strip tags, decode entities, fold full-width ASCII and
+    // collapse whitespace in one buffer. No regex recompilation or intermediate
+    // strings for every XHTML file in every EPUB.
     private static String htmlToText(String html) {
-        String s = html.replaceAll("(?is)<(script|style|head)\\b[^>]*>.*?</\\1>", " ");
-        // Ruby annotations are readings, not part of the prose. Without this,
-        // 行<rt>い</rt>った becomes 行いった and the tokenizer extracts garbage
-        // like 行い instead of the real word.
-        s = s.replaceAll("(?is)<(rt|rp)\\b[^>]*>.*?</\\1>", "");
-        s = s.replaceAll("(?i)<br\\s*/?>", "\n");
-        s = s.replaceAll("(?i)</?(p|div|h[1-6]|li|tr|section|blockquote|article)\\b[^>]*>", "\n");
-        s = s.replaceAll("(?s)<[^>]+>", "");
-        s = decodeEntities(s);
-        s = normalizeWidth(s);
-        s = s.replace('\u3000', ' ');
-        s = s.replaceAll("[ \\t\\r\\f]+", " ");
-        s = s.replaceAll(" *\\n *", "\n");
-        s = s.replaceAll("\\n{3,}", "\n\n");
-        return s.trim();
+        StringBuilder out = new StringBuilder(html.length());
+        boolean pendingSpace = false;
+        int n = html.length();
+        int i = 0;
+        while (i < n) {
+            char c = html.charAt(i);
+            if (c == '<') {
+                int gt = tagEnd(html, i + 1);
+                if (gt > i + 1) {
+                    char first = html.charAt(i + 1);
+                    if (Character.isLetter(first) || first == '/' || first == '!') {
+                        int ns = i + 1;
+                        boolean closing = html.charAt(ns) == '/';
+                        if (closing) ns++;
+                        while (ns < gt && Character.isWhitespace(html.charAt(ns))) ns++;
+                        int ne = ns;
+                        while (ne < gt && !Character.isWhitespace(html.charAt(ne))
+                                && html.charAt(ne) != '/') ne++;
+                        if (!closing) {
+                            if (tagIs(html, ns, ne, "script")) {
+                                i = skipBlock(html, gt + 1, "script");
+                                pendingSpace = true;
+                                continue;
+                            }
+                            if (tagIs(html, ns, ne, "style")) {
+                                i = skipBlock(html, gt + 1, "style");
+                                pendingSpace = true;
+                                continue;
+                            }
+                            if (tagIs(html, ns, ne, "head")) {
+                                i = skipBlock(html, gt + 1, "head");
+                                pendingSpace = true;
+                                continue;
+                            }
+                            // Ruby annotations are readings, not prose: without
+                            // this 行<rt>い</rt>った becomes the bogus token 行い.
+                            if (tagIs(html, ns, ne, "rt")) {
+                                i = skipBlock(html, gt + 1, "rt");
+                                continue;
+                            }
+                            if (tagIs(html, ns, ne, "rp")) {
+                                i = skipBlock(html, gt + 1, "rp");
+                                continue;
+                            }
+                        }
+                        if (tagIs(html, ns, ne, "br") || isBlockTag(html, ns, ne)) {
+                            pendingSpace = false;
+                            appendNewline(out);
+                        }
+                        i = gt + 1;
+                        continue;
+                    }
+                }
+            }
+            if (c == '&') {
+                int semi = -1;
+                int limit = Math.min(n, i + 14);
+                for (int k = i + 1; k < limit; k++) {
+                    char e = html.charAt(k);
+                    if (e == ';') { semi = k; break; }
+                    if (e == '<' || e == '&') break;
+                }
+                if (semi > i + 1) {
+                    String rep = entityText(html.substring(i + 1, semi));
+                    if (rep != null) {
+                        if (rep.equals(" ")) {
+                            pendingSpace = true;
+                        } else {
+                            if (pendingSpace && out.length() > 0
+                                    && out.charAt(out.length() - 1) != '\n') out.append(' ');
+                            pendingSpace = false;
+                            for (int k = 0; k < rep.length(); k++) {
+                                char r = rep.charAt(k);
+                                out.append(r >= 0xFF01 && r <= 0xFF5E
+                                        ? (char) (r - 0xFEE0) : r);
+                            }
+                        }
+                        i = semi + 1;
+                        continue;
+                    }
+                }
+            }
+            if (Character.isWhitespace(c)) {
+                if (c == '\n') {
+                    pendingSpace = false;
+                    appendNewline(out);
+                } else {
+                    pendingSpace = true;
+                }
+                i++;
+                continue;
+            }
+            if (pendingSpace && out.length() > 0
+                    && out.charAt(out.length() - 1) != '\n') out.append(' ');
+            pendingSpace = false;
+            out.append(c >= 0xFF01 && c <= 0xFF5E ? (char) (c - 0xFEE0) : c);
+            i++;
+        }
+        while (out.length() > 0) {
+            char last = out.charAt(out.length() - 1);
+            if (last != ' ' && last != '\n') break;
+            out.setLength(out.length() - 1);
+        }
+        return out.toString();
     }
 
     /** Computes character count, dialogue percentage, and average sentence length. */
