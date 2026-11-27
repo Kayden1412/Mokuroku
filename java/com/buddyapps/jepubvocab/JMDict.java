@@ -2,21 +2,16 @@ package com.buddyapps.jepubvocab;
 
 import android.content.Context;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 
 /**
- * Offline lookup over a compact subset of JMdict (common entries, three senses
- * each). Surface forms are indexed in memory; inflected forms are handled by
- * the Yomitan-derived deinflector.
+ * Offline lookup over a compact subset of JMdict. Forms, POS tags, glosses and
+ * deinflection conditions come from the precompiled {@code assets/dict.bin}
+ * trie, so no text file is parsed and no large form→entry HashMap is allocated
+ * at startup. Inflected forms are handled by the Yomitan-derived deinflector.
  */
 final class JMDict {
 
@@ -62,47 +57,31 @@ final class JMDict {
         }
     }
 
-    private static Map<String, Entry> byForm;
+    private static DictBin dict;
+    private static boolean attempted;
 
     private JMDict() { }
 
     static synchronized void load(Context c) {
-        if (byForm != null) return;
-        HashMap<String, Entry> map = new HashMap<String, Entry>();
-        try {
-            InputStream in = c.getAssets().open("jmdict.txt");
-            BufferedReader reader = new BufferedReader(new InputStreamReader(in, "UTF-8"));
-            String line;
-            while ((line = reader.readLine()) != null) {
-                String[] fields = line.split("\t", -1);
-                if (fields.length < 4) continue;
-                String[] forms = fields[0].split(",");
-                String[] pos = fields[2].isEmpty() ? new String[0] : fields[2].split(",");
-                String[] glosses = fields[3].split("\u001f", -1);
-                Entry entry = new Entry(forms[0], fields[1], pos, glosses);
-                for (String form : forms) {
-                    if (!form.isEmpty() && !map.containsKey(form)) map.put(form, entry);
-                }
-            }
-            reader.close();
-        } catch (IOException e) {
-            map.clear();
-        }
-        byForm = map;
+        if (dict != null || attempted) return;
+        attempted = true;
+        dict = DictBin.load(c);
+    }
+
+    static DictBin dict() {
+        return dict;
     }
 
     static boolean contains(String form) {
-        return byForm != null && form != null && byForm.containsKey(form);
+        if (dict == null || form == null) return false;
+        return dict.isWord(dict.lookup(form));
     }
 
     static boolean isContentWord(String form) {
-        if (byForm == null || form == null) return false;
-        Entry e = byForm.get(form);
-        return e != null && e.contentWord;
-    }
-
-    static Map<String, Entry> formMap() {
-        return byForm;
+        if (dict == null || form == null) return false;
+        int node = dict.lookup(form);
+        if (node < 0) return false;
+        return dict.isContentEntry(dict.entryFor(node));
     }
 
     /**
@@ -111,15 +90,16 @@ final class JMDict {
      * returns null when no valid inflected verb/adjective matches.
      */
     static InflectHit bestInflection(String surface) {
-        if (byForm == null || surface == null || surface.length() < 2) return null;
-        final Map<String, Entry> map = byForm;
+        if (dict == null || surface == null || surface.length() < 2) return null;
+        final DictBin d = dict;
         final InflectHit[] best = new InflectHit[1];
         final double[] bestScore = new double[]{Double.MAX_VALUE};
         Deinflector.deinflectSteps(surface, new Deinflector.StepVisitor() {
             @Override public void visit(String candidate, int conditions, int steps) {
-                Entry entry = map.get(candidate);
-                if (entry == null) return;
-                if ((entry.conditions & conditions) == 0) return;
+                int node = d.lookup(candidate);
+                if (node < 0) return;
+                int eid = d.entryFor(node);
+                if (eid < 0 || (d.entryConditions(eid) & conditions) == 0) return;
                 int rank = JitenRank.rank(candidate);
                 double score = steps * 2.5 + Math.log(rank + 2.0);
                 if (score < bestScore[0]) {
@@ -138,7 +118,7 @@ final class JMDict {
      * auxiliary, copula, prefix/suffix, numeric). Unknown tokens stay as-is.
      */
     static String similarityForm(String word) {
-        if (byForm == null || word == null || word.isEmpty()) return word;
+        if (dict == null || word == null || word.isEmpty()) return word;
         List<Hit> hits = exact(word);
         if (hits.isEmpty()) return word;
         for (Hit h : hits) {
@@ -163,7 +143,7 @@ final class JMDict {
     }
 
     static List<Hit> lookup(String text) {
-        if (byForm == null || text == null || text.isEmpty())
+        if (dict == null || text == null || text.isEmpty())
             return new ArrayList<Hit>();
         List<Hit> hits = exact(text);
         if (hits.isEmpty() && text.codePointCount(0, text.length()) > 2) {
@@ -181,7 +161,7 @@ final class JMDict {
         ArrayList<Hit> hits = new ArrayList<Hit>();
         HashSet<String> seen = new HashSet<String>();
         for (Deinflector.Result r : Deinflector.deinflect(text)) {
-            Entry entry = byForm.get(r.text);
+            Entry entry = entryFor(r.text);
             if (entry == null) continue;
             if (r.conditions != DeinflectorRules.NONE
                     && (entry.conditions & r.conditions) == 0) continue;
@@ -189,6 +169,18 @@ final class JMDict {
             hits.add(new Hit(entry, r.text, r.trace));
         }
         return hits;
+    }
+
+    /** Decodes one packed JMdict entry from the binary trie table. */
+    private static Entry entryFor(String form) {
+        if (dict == null || form == null) return null;
+        int node = dict.lookup(form);
+        if (node < 0) return null;
+        String[] fields = dict.entryFields(dict.entryFor(node));
+        if (fields == null || fields.length < 4) return null;
+        String[] pos = fields[2].isEmpty() ? new String[0] : fields[2].split(",");
+        String[] glosses = fields[3].split("\u001f", -1);
+        return new Entry(fields[0], fields[1], pos, glosses);
     }
 
     private static int conditionsFor(String[] pos) {

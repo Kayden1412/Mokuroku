@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build assets/jiten_rank.txt from Jiten's global frequency CSV.
+"""Build data/jiten_rank.txt from Jiten's global frequency CSV.
 
 Usage: python3 scripts/gen_jiten_rank.py /path/to/frequency_list_global.csv [max_rows]
 
@@ -14,7 +14,7 @@ import sys
 
 MAX_ROWS = 100000
 OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                   "assets", "jiten_rank.txt")
+                   "data", "jiten_rank.txt")
 
 
 def main() -> int:

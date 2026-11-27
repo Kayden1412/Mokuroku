@@ -26,10 +26,15 @@ regenerated with `scripts/gen_jmnedict_bloom.py`.
 Deinflection rules are derived from
 [hoshidicts](https://github.com/Manhhao/hoshidicts), which follows Yomitan's
 Japanese transforms. Regenerate them with `scripts/gen_deinflector.py` from a
-shallow clone, and regenerate the dictionary with `scripts/build_jmdict.py`.
-Matcher word ranks come from [Jiten's global frequency dictionary](https://jiten.moe/frequency-dictionaries)
-(CC BY-SA 4.0); regenerate the embedded top 100,000 entries with
-`scripts/gen_jiten_rank.py` from its Global CSV.
+shallow clone. Matcher word ranks come from [Jiten's global frequency dictionary](https://jiten.moe/frequency-dictionaries)
+(CC BY-SA 4.0).
+
+Both dictionaries are compiled into a single prebuilt binary trie at
+`assets/dict.bin`. To regenerate it, run `scripts/build_jmdict.py` (from
+`JMdict_e.gz`) and `scripts/gen_jiten_rank.py` (from Jiten's Global CSV) to
+refresh the intermediate text files in `data/`, then run
+`python3 scripts/gen_dict_bin.py`. The app reads the binary directly, so startup
+does not parse text files or build a large HashMap.
 
 ## Build Locally
 
@@ -51,10 +56,12 @@ The signed APK appears at `build/app.apk`.
   EPUBs copied by older versions are shown in the **Storage** tab and can be
   deleted there.
 - Text is stripped of markup, split into ~1400-character pages, and tokenized with
-  a dictionary-based longest-match tokenizer: the embedded JMdict surface forms
-  are held in a compact trie, with script runs (kanji + okurigana, hiragana,
-  katakana) as fallback. Full-width ASCII is folded to half-width and Japanese
-  punctuation/quotes act as word boundaries. Common particles are filtered out.
+  a rank-scored Viterbi tokenizer over a compact flat-array trie of JMdict and
+  Jiten forms precompiled into `assets/dict.bin`. Script runs (kanji +
+  okurigana, hiragana, katakana) fall back to morphological heuristics, and
+  stem-gated deinflection collapses inflections to lemmas. Full-width ASCII is
+  folded to half-width and Japanese punctuation/quotes act as word boundaries.
+  Common particles are filtered out.
 - Similarity blends sublinear-TF (`1 + ln(count)`), rank-weighted TF-IDF
   cosine over deinflected content words (JMdict POS filtering + Jiten global
   ranks, with low-overlap damping) and sublinear-TF Japanese character bigrams.

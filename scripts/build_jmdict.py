@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "JMdict_e.gz"
-OUT = ROOT / "jepubvocab" / "assets" / "jmdict.txt"
+OUT = ROOT / "jepubvocab" / "data" / "jmdict.txt"
 PRIORITY = {"ichi1", "news1", "spec1", "gai1"}
 
 OUT.parent.mkdir(parents=True, exist_ok=True)

@@ -49,7 +49,7 @@ final class Tokenizer {
             "けれども", "だが", "でも", "ため", "よう", "はず", "わけ", "一"));
 
     private static final class Trie {
-        final int[] root = new int[65536];
+        int[] root;
         char[] ch;
         int[] first;
         int[] next;
@@ -66,6 +66,16 @@ final class Tokenizer {
             rank = new int[capacity];
             Arrays.fill(first, -1);
             Arrays.fill(next, -1);
+        }
+
+        /** Zero-copy view over the precompiled trie in assets/dict.bin. */
+        Trie(DictBin d) {
+            root = d.root;
+            ch = d.ch;
+            first = d.firstChild;
+            next = d.nextSibling;
+            flags = d.flags;
+            rank = d.rank;
         }
 
         private void ensureCapacity(int needed) {
@@ -145,38 +155,16 @@ final class Tokenizer {
             JMDict.load(c);
             JMNedict.load(c);
             JitenRank.load(c);
-
-            Trie built = new Trie(230000);
-            Map<String, JMDict.Entry> jm = JMDict.formMap();
-            if (jm != null) {
-                for (Map.Entry<String, JMDict.Entry> e : jm.entrySet()) {
-                    String form = e.getKey();
-                    JMDict.Entry entry = e.getValue();
-                    if (form == null || form.isEmpty()) continue;
-                    int r = JitenRank.rank(form);
-                    built.insert(form, r, true, false);
-                    if (entry != null && entry.conditions != 0) {
-                        String stem = form.length() >= 2
-                                ? form.substring(0, form.length() - 1) : form;
-                        built.insert(stem, 0, false, true);
-                    }
-                }
+            DictBin d = JMDict.dict();
+            if (d != null) {
+                trie = new Trie(d);
+            } else {
+                // No precompiled dictionary: leave the tokenizer idle rather
+                // than spending seconds parsing text files on the UI thread.
+                Trie empty = new Trie(1);
+                empty.trim();
+                trie = empty;
             }
-            Map<String, Integer> jr = JitenRank.rankMap();
-            if (jr != null) {
-                for (Map.Entry<String, Integer> e : jr.entrySet()) {
-                    String w = e.getKey();
-                    if (w == null || w.isEmpty()) continue;
-                    built.insert(w, e.getValue(), true, false);
-                }
-            }
-            // Irregular verb/adjective stems (来る, する, いい/よい).
-            String[] irregularStems = {"来", "き", "こ", "く", "し", "さ", "せ", "す", "よ", "い"};
-            for (String s : irregularStems) {
-                built.insert(s, 0, false, true);
-            }
-            built.trim();
-            trie = built;
         }
     }
 
