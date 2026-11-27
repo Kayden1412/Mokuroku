@@ -51,11 +51,38 @@ final class JMDict {
     }
 
     private static Map<String, Entry> byForm;
+    private static volatile TrieNode formTrie;
+
+    // Compact trie: only branching nodes need a HashMap, so the ~21k surface
+    // forms already embedded in jmdict.txt cost a few hundred KB, not an extra
+    // dictionary download or a bigger APK.
+    private static final class TrieNode {
+        char ch;
+        TrieNode first;
+        HashMap<Character, TrieNode> rest;
+        boolean word;
+
+        TrieNode child(char c) {
+            if (first == null) return null;
+            if (first.ch == c) return first;
+            return rest == null ? null : rest.get(c);
+        }
+
+        void add(TrieNode node) {
+            if (first == null) {
+                first = node;
+            } else {
+                if (rest == null) rest = new HashMap<Character, TrieNode>();
+                rest.put(node.ch, node);
+            }
+        }
+    }
 
     private JMDict() { }
 
     static synchronized void load(Context c) {
         if (byForm != null) return;
+        formTrie = null;
         HashMap<String, Entry> map = new HashMap<String, Entry>();
         try {
             InputStream in = c.getAssets().open("jmdict.txt");
@@ -81,6 +108,46 @@ final class JMDict {
 
     static boolean contains(String form) {
         return byForm != null && form != null && byForm.containsKey(form);
+    }
+
+    private static synchronized void buildTrie() {
+        if (formTrie != null) return;
+        TrieNode root = new TrieNode();
+        for (String form : byForm.keySet()) {
+            if (form == null || form.isEmpty()) continue;
+            TrieNode node = root;
+            for (int i = 0; i < form.length(); i++) {
+                char c = form.charAt(i);
+                TrieNode next = node.child(c);
+                if (next == null) {
+                    next = new TrieNode();
+                    next.ch = c;
+                    node.add(next);
+                }
+                node = next;
+            }
+            node.word = true;
+        }
+        formTrie = root;
+    }
+
+    /**
+     * Longest dictionary form starting at {@code start}. Returns the end index
+     * (exclusive), or -1 when no entry matches. Used by the tokenizer's
+     * longest-match segmentation.
+     */
+    static synchronized int longestForm(String text, int start, int maxLen) {
+        if (byForm == null || text == null) return -1;
+        if (formTrie == null) buildTrie();
+        TrieNode node = formTrie;
+        int limit = Math.min(text.length(), start + maxLen);
+        int end = -1;
+        for (int i = start; i < limit; i++) {
+            node = node.child(text.charAt(i));
+            if (node == null) break;
+            if (node.word) end = i + 1;
+        }
+        return end;
     }
 
     /**

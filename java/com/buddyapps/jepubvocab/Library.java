@@ -46,7 +46,7 @@ public final class Library {
     private static final int MAX_PAGES = 400;
     private static final int MAX_GRAMS = 180;
     // Bump when parsing changes so old cached vocabularies are rebuilt once.
-    private static final int CACHE_VERSION = 5;
+    private static final int CACHE_VERSION = 6;
     private static final long serialVersionUID = 1L;
 
     private static File cacheFile;
@@ -996,6 +996,14 @@ public final class Library {
         return word;
     }
 
+    private static boolean isAllHira(String text, int from, int to) {
+        if (from >= to) return false;
+        for (int p = from; p < to; p++) {
+            if (!isHira(text.charAt(p))) return false;
+        }
+        return true;
+    }
+
     private static HashMap<String, Integer> tokenize(String text, Map<String, String> snippets) {
         HashMap<String, Integer> counts = new HashMap<String, Integer>();
         int i = 0;
@@ -1003,29 +1011,38 @@ public final class Library {
         while (i < len) {
             int start = i;
             char c = text.charAt(i);
-            String word = null;
+            int scriptEnd = -1;
             if (isKanji(c)) {
                 int j = i;
                 while (j < len && isKanji(text.charAt(j)) && j - i < 8) j++;
                 int k = j;
                 int okuri = 0;
                 while (k < len && isHira(text.charAt(k)) && okuri < 3) { k++; okuri++; }
-                word = text.substring(i, k);
-                i = k;
+                scriptEnd = k;
             } else if (isHira(c)) {
                 int j = i;
                 while (j < len && isHira(text.charAt(j)) && j - i < 8) j++;
-                word = text.substring(i, j);
-                i = j;
+                scriptEnd = j;
             } else if (isKata(c)) {
                 int j = i;
                 while (j < len && isKata(text.charAt(j)) && j - i < 16) j++;
-                word = text.substring(i, j);
-                i = j;
+                scriptEnd = j;
             } else {
                 i++;
+                continue;
             }
-            if (word == null) continue;
+            // Dictionary-based longest match: split runs at real word boundaries
+            // (学校生活 -> 学校/生活) instead of swallowing the whole run. A
+            // following hiragana tail is kept so normalizeToken can strip
+            // okurigana/particles from inflected forms.
+            int dictEnd = JMDict.longestForm(text, i, 16);
+            int end = scriptEnd;
+            if (dictEnd >= i + 2) {
+                end = (dictEnd < scriptEnd && isAllHira(text, dictEnd, scriptEnd))
+                        ? scriptEnd : dictEnd;
+            }
+            String word = text.substring(i, end);
+            i = end;
             // Prefer the longest recognised prefix, as a dictionary scanner does.
             word = normalizeToken(word);
             if (word.length() < 2 || STOP.contains(word) || JMNedict.isName(word)) continue;
