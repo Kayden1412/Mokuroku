@@ -30,7 +30,7 @@ final class StorageDb extends SQLiteOpenHelper {
     private static final String CHUNKS = "chunks";
     private static final String DB_NAME = "mokuroku.db";
     // Bump together with Library.CACHE_VERSION when the stored format changes.
-    private static final int DB_VERSION = 8;
+    private static final int DB_VERSION = 9;
     private static final int CHUNK_BYTES = 256 * 1024;
 
     StorageDb(Context c) {
@@ -69,17 +69,28 @@ final class StorageDb extends SQLiteOpenHelper {
         return out;
     }
 
-    private static HashMap<String, String> canonicalValues(HashMap<String, String> map,
-                                                            Map<String, String> pool) {
-        HashMap<String, String> out = new HashMap<String, String>(map.size());
-        for (Map.Entry<String, String> e : map.entrySet()) {
-            out.put(canonical(e.getKey(), pool), canonical(e.getValue(), pool));
-        }
-        return out;
-    }
-
-    /** Tokens are built as fresh Strings; sharing them shrinks each BLOB a lot. */
+    /**
+     * Stores only what cannot be derived cheaply: page text, word counts, gram
+     * counts and snippet keys. Vocabulary lists, book totals and snippet strings
+     * are rebuilt from the page text on load. Tokens are also canonicalised so
+     * repeated words are written once per book.
+     */
     private static byte[] serialize(Library.BookInfo book) {
+        ArrayList<Library.VocabEntry> bookVocab = book.vocab;
+        HashMap<String, Integer> bookVocabMap = book.vocabMap;
+        HashMap<String, String> bookSnippets = book.snippets;
+        HashMap<String, Integer> bookGrams = book.grams;
+        book.vocab = new ArrayList<Library.VocabEntry>();
+        book.vocabMap = new HashMap<String, Integer>();
+        book.snippets = new HashMap<String, String>();
+        book.grams = new HashMap<String, Integer>();
+
+        ArrayList<ArrayList<Library.VocabEntry>> pageLists =
+                new ArrayList<ArrayList<Library.VocabEntry>>();
+        ArrayList<HashMap<String, String>> pageSnippets =
+                new ArrayList<HashMap<String, String>>();
+        ArrayList<String> firstWords = new ArrayList<String>();
+        ArrayList<String> firstSnippets = new ArrayList<String>();
         try {
             Map<String, String> pool = new HashMap<String, String>();
             book.title = canonical(book.title, pool);
@@ -88,22 +99,22 @@ final class StorageDb extends SQLiteOpenHelper {
             for (Library.PageInfo page : book.pages) {
                 page.text = canonical(page.text, pool);
                 page.vocab = canonicalKeys(page.vocab, pool);
-                page.snippets = canonicalValues(page.snippets, pool);
                 page.grams = canonicalKeys(page.grams, pool);
-                for (Library.VocabEntry v : page.vocabList) {
-                    v.word = canonical(v.word, pool);
-                    v.snippet = canonical(v.snippet, pool);
+
+                pageLists.add(page.vocabList);
+                pageSnippets.add(page.snippets);
+                firstWords.add(page.firstSnippetWord);
+                firstSnippets.add(page.firstSnippet);
+
+                HashMap<String, String> keysOnly = new HashMap<String, String>();
+                for (String word : page.snippets.keySet()) {
+                    keysOnly.put(canonical(word, pool), "");
                 }
-                page.firstSnippetWord = canonical(page.firstSnippetWord, pool);
-                page.firstSnippet = canonical(page.firstSnippet, pool);
+                page.snippets = keysOnly;
+                page.vocabList = new ArrayList<Library.VocabEntry>();
+                page.firstSnippetWord = "";
+                page.firstSnippet = "";
             }
-            for (Library.VocabEntry v : book.vocab) {
-                v.word = canonical(v.word, pool);
-                v.snippet = canonical(v.snippet, pool);
-            }
-            book.vocabMap = canonicalKeys(book.vocabMap, pool);
-            book.snippets = canonicalValues(book.snippets, pool);
-            book.grams = canonicalKeys(book.grams, pool);
 
             ByteArrayOutputStream bytes = new ByteArrayOutputStream();
             ObjectOutputStream out = new ObjectOutputStream(bytes);
@@ -115,6 +126,18 @@ final class StorageDb extends SQLiteOpenHelper {
             return bytes.toByteArray();
         } catch (Throwable e) {
             return null;
+        } finally {
+            book.vocab = bookVocab;
+            book.vocabMap = bookVocabMap;
+            book.snippets = bookSnippets;
+            book.grams = bookGrams;
+            for (int i = 0; i < book.pages.size(); i++) {
+                Library.PageInfo page = book.pages.get(i);
+                if (i < pageLists.size()) page.vocabList = pageLists.get(i);
+                if (i < pageSnippets.size()) page.snippets = pageSnippets.get(i);
+                if (i < firstWords.size()) page.firstSnippetWord = firstWords.get(i);
+                if (i < firstSnippets.size()) page.firstSnippet = firstSnippets.get(i);
+            }
         }
     }
 
@@ -123,7 +146,10 @@ final class StorageDb extends SQLiteOpenHelper {
             ObjectInputStream in = new ObjectInputStream(new ByteArrayInputStream(data));
             try {
                 Object o = in.readObject();
-                return o instanceof Library.BookInfo ? (Library.BookInfo) o : null;
+                if (!(o instanceof Library.BookInfo)) return null;
+                Library.BookInfo book = (Library.BookInfo) o;
+                Library.rebuildDerived(book);
+                return book;
             } finally {
                 in.close();
             }

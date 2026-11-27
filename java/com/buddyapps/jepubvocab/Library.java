@@ -1377,12 +1377,7 @@ public final class Library {
             Integer old = counts.get(word);
             counts.put(word, old == null ? 1 : old + 1);
             if (!snippets.containsKey(word)) {
-                int pos = start;
-                if (pos < 0 || !text.startsWith(word, pos)) pos = text.indexOf(word);
-                if (pos < 0) pos = 0;
-                int from = Math.max(0, pos - 18);
-                int to = Math.min(len, pos + word.length() + 22);
-                snippets.put(word, "…" + text.substring(from, to).replace('\n', ' ').trim() + "…");
+                snippets.put(word, makeSnippet(text, word, start));
             }
         }
         return counts;
@@ -1441,6 +1436,56 @@ public final class Library {
             out.add(new VocabEntry(w, counts.get(w), s == null ? "" : s));
         }
         return out;
+    }
+
+    /** Recreates the short quotation shown for a word from the page text. */
+    static String makeSnippet(String text, String word, int pos) {
+        int len = text.length();
+        if (pos < 0 || !text.startsWith(word, pos)) pos = text.indexOf(word);
+        if (pos < 0) pos = 0;
+        int from = Math.max(0, pos - 18);
+        int to = Math.min(len, pos + word.length() + 22);
+        return "…" + text.substring(from, to).replace('\n', ' ').trim() + "…";
+    }
+
+    /**
+     * Restores everything that is cheap to derive from stored page text and word
+     * counts. Keeping these structures out of the database saves a lot of space.
+     */
+    static void rebuildDerived(BookInfo book) {
+        HashMap<String, Integer> vocabMap = new HashMap<String, Integer>();
+        HashMap<String, String> snippets = new HashMap<String, String>();
+        HashMap<String, Integer> grams = new HashMap<String, Integer>();
+        for (PageInfo page : book.pages) {
+            // Storage keeps only snippet keys; the strings are rebuilt from text.
+            for (String word : new ArrayList<String>(page.snippets.keySet())) {
+                page.snippets.put(word, makeSnippet(page.text, word, page.text.indexOf(word)));
+            }
+            page.vocabList = toVocabList(page.vocab, page.snippets);
+            if (!page.vocabList.isEmpty()) {
+                page.firstSnippetWord = page.vocabList.get(0).word;
+                page.firstSnippet = page.vocabList.get(0).snippet;
+            } else {
+                page.firstSnippetWord = "";
+                page.firstSnippet = "";
+            }
+            for (Map.Entry<String, Integer> e : page.vocab.entrySet()) {
+                Integer old = vocabMap.get(e.getKey());
+                vocabMap.put(e.getKey(), old == null ? e.getValue() : old + e.getValue());
+            }
+            for (Map.Entry<String, String> e : page.snippets.entrySet()) {
+                if (!snippets.containsKey(e.getKey())) snippets.put(e.getKey(), e.getValue());
+            }
+            for (Map.Entry<String, Integer> e : page.grams.entrySet()) {
+                Integer old = grams.get(e.getKey());
+                grams.put(e.getKey(), old == null ? e.getValue() : old + e.getValue());
+            }
+        }
+        book.vocabMap = vocabMap;
+        book.snippets = snippets;
+        book.grams = grams;
+        trimGrams(book.grams);
+        book.vocab = toVocabList(book.vocabMap, book.snippets);
     }
 
     private static ArrayList<PageInfo> splitPages(String text) {
