@@ -197,7 +197,6 @@ public class BookActivity extends Activity {
             if (excludeSameAuthor
                     && sameAuthor(source, Library.books.get(s.bookIndex))) continue;
             displayed.add(s);
-            if (displayed.size() >= 6) break;
         }
         if (similarAdapter != null) similarAdapter.notifyDataSetChanged();
         if (emptyNote != null) {

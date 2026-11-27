@@ -25,6 +25,7 @@ import java.util.Comparator;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -57,6 +58,11 @@ public final class Library {
             new HashMap<Integer, List<SimilarInfo>>();
     private static int totalVocabCount = -1;
     private static ArrayList<VocabEntry> allVocab;
+    // Pairwise scores and each book's strongest neighbours. Built lazily so
+    // opening a book does not scan the whole library on the UI thread.
+    private static volatile double[][] similarityMatrix;
+    private static int[][] similarTopK;
+    private static final int SIMILAR_TOP_K = 12;
 
     private Library() { }
 
@@ -303,6 +309,8 @@ public final class Library {
         // Book indexes can change when books are added or removed.
         Ui.clearCovers();
         bookSimilarCache.clear();
+        similarityMatrix = null;
+        similarTopK = null;
         totalVocabCount = wordDf.size();
         allVocab = null;
     }
@@ -359,21 +367,60 @@ public final class Library {
                 + 0.3 * cosine(gramDot, gramNorm, bookGramNorm[i]);
     }
 
-    public static List<SimilarInfo> similarToBook(BookInfo source) {
+    /**
+     * Computes every pair once. The score itself is symmetric, so a book that
+     * appears in another's shortlist can always appear back in its own.
+     */
+    private static synchronized void ensureSimilarityMatrix() {
+        int n = books.size();
+        if (similarityMatrix != null && similarityMatrix.length == n) return;
+        double[][] m = new double[n][n];
+        for (int i = 0; i < n; i++) {
+            BookInfo a = books.get(i);
+            for (int j = i + 1; j < n; j++) {
+                double score = matchScore(a.vocabMap, a.grams, books.get(j));
+                m[i][j] = score;
+                m[j][i] = score;
+            }
+        }
+        int[][] top = new int[n][];
+        for (int i = 0; i < n; i++) {
+            ArrayList<SimilarInfo> row = new ArrayList<SimilarInfo>(n);
+            for (int j = 0; j < n; j++) {
+                if (j != i) row.add(new SimilarInfo(j, m[i][j], null));
+            }
+            Collections.sort(row);
+            int k = Math.min(SIMILAR_TOP_K, row.size());
+            int[] best = new int[k];
+            for (int t = 0; t < k; t++) best[t] = row.get(t).bookIndex;
+            top[i] = best;
+        }
+        similarTopK = top;
+        similarityMatrix = m;
+    }
+
+    public static synchronized List<SimilarInfo> similarToBook(BookInfo source) {
         List<SimilarInfo> cached = bookSimilarCache.get(source.index);
         if (cached != null) return cached;
-        ArrayList<SimilarInfo> out = new ArrayList<SimilarInfo>();
-        for (BookInfo other : books) {
-            if (other.index == source.index) continue;
-            double score = matchScore(source.vocabMap, source.grams, other);
-            out.add(new SimilarInfo(other.index, score, null));
+        ensureSimilarityMatrix();
+        double[][] matrix = similarityMatrix;
+        int[][] top = similarTopK;
+        int n = books.size();
+        // Union of this book's strongest matches and every book that lists this
+        // one, so similar lists are reciprocal instead of one-directional.
+        LinkedHashSet<Integer> candidates = new LinkedHashSet<Integer>();
+        for (int j : top[source.index]) candidates.add(j);
+        for (int i = 0; i < n; i++) {
+            if (i == source.index) continue;
+            for (int j : top[i]) {
+                if (j == source.index) { candidates.add(i); break; }
+            }
+        }
+        ArrayList<SimilarInfo> out = new ArrayList<SimilarInfo>(candidates.size());
+        for (int j : candidates) {
+            out.add(new SimilarInfo(j, matrix[source.index][j], null));
         }
         Collections.sort(out);
-        // Keep a few extra candidates so a UI filter (e.g. same author) can
-        // still fill the shortlist. BookActivity shows the first six after filtering.
-        if (out.size() > 12) out = new ArrayList<SimilarInfo>(out.subList(0, 12));
-        // Sorting the source vocabulary is expensive: only do it for the books
-        // that actually made the shortlist, not for every title in the library.
         for (SimilarInfo s : out) {
             s.shared = sharedWords(source.vocabMap, books.get(s.bookIndex).vocabMap);
         }
