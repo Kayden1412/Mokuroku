@@ -40,10 +40,10 @@ public class VocabActivity extends Activity {
             SORT_WORD_ASC, SORT_WORD_DESC
     };
     private static final String[] BOOK_LABELS = {
-            "Book freq: most", "Book freq: fewest",
-            "Jiten: common", "Jiten: rare",
+            "Book freq: high → low", "Book freq: low → high",
+            "Jiten rank: common → rare", "Jiten rank: rare → common",
             "First in book", "Last in book",
-            "A → Z", "Z → A"
+            "Word A → Z", "Word Z → A"
     };
     private static final int[] ALL_MODES = {
             SORT_BOOK_FREQ, SORT_BOOK_FREQ_ASC,
@@ -51,9 +51,9 @@ public class VocabActivity extends Activity {
             SORT_WORD_ASC, SORT_WORD_DESC
     };
     private static final String[] ALL_LABELS = {
-            "Book freq: most", "Book freq: fewest",
-            "Jiten: common", "Jiten: rare",
-            "A → Z", "Z → A"
+            "Book freq: high → low", "Book freq: low → high",
+            "Jiten rank: common → rare", "Jiten rank: rare → common",
+            "Word A → Z", "Word Z → A"
     };
 
     private final ArrayList<Library.VocabEntry> entries =
@@ -299,15 +299,18 @@ public class VocabActivity extends Activity {
     private void updateCount() {
         String label;
         if (sortMode == SORT_JITEN_FREQ || sortMode == SORT_JITEN_FREQ_ASC) {
-            label = sortMode == SORT_JITEN_FREQ ? "Jiten frequency" : "Jiten rarity";
+            label = sortMode == SORT_JITEN_FREQ
+                    ? "Jiten rank (common → rare)" : "Jiten rank (rare → common)";
         } else if (sortMode == SORT_CHRONO || sortMode == SORT_CHRONO_LAST) {
             label = sortMode == SORT_CHRONO ? "first occurrence" : "last occurrence";
         } else if (sortMode == SORT_WORD_ASC || sortMode == SORT_WORD_DESC) {
             label = sortMode == SORT_WORD_ASC ? "word A → Z" : "word Z → A";
         } else if (!oneBook) {
-            label = "frequency";
+            label = sortMode == SORT_BOOK_FREQ
+                    ? "frequency (high → low)" : "frequency (low → high)";
         } else {
-            label = sortMode == SORT_BOOK_FREQ ? "book frequency" : "book rarity";
+            label = sortMode == SORT_BOOK_FREQ
+                    ? "book freq (high → low)" : "book freq (low → high)";
         }
         String shown = search.getText().toString().trim().isEmpty()
                 ? Ui.num(entries.size())
