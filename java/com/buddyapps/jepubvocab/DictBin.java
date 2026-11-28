@@ -22,7 +22,7 @@ import java.util.Arrays;
  */
 final class DictBin {
 
-    private static final int MAGIC = 0x4D4B4432; // "MKD2"
+    private static final int MAGIC = 0x4D4B4433; // "MKD3"
     static final byte FLAG_WORD = 1;
     static final byte FLAG_STEM = 2;
 
@@ -32,6 +32,7 @@ final class DictBin {
     int[] firstChild;  // firstChild[nodeCount]: linked-list first child
     int[] nextSibling; // nextSibling[nodeCount]: linked-list next sibling
     byte[] flags;      // flags[nodeCount]: FLAG_WORD | FLAG_STEM
+    byte[] pos;        // pos[nodeCount]: coarse POS class (0 = unknown)
     int[] rank;        // rank[nodeCount]: Jiten frequency rank
 
     // --- JMDict entry table ---
@@ -90,6 +91,9 @@ final class DictBin {
 
         d.flags = new byte[d.nodeCount];
         in.readFully(d.flags);
+
+        d.pos = new byte[d.nodeCount];
+        in.readFully(d.pos);
 
         d.rank = new int[d.nodeCount];
         for (int i = 0; i < d.nodeCount; i++) d.rank[i] = in.readInt();

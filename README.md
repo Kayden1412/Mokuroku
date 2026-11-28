@@ -56,12 +56,15 @@ The signed APK appears at `build/app.apk`.
   EPUBs copied by older versions are shown in the **Storage** tab and can be
   deleted there.
 - Text is stripped of markup, split into ~1400-character pages, and tokenized with
-  a rank-scored Viterbi tokenizer over a compact flat-array trie of JMdict and
-  Jiten forms precompiled into `assets/dict.bin`. Script runs (kanji +
-  okurigana, hiragana, katakana) fall back to morphological heuristics, and
-  stem-gated deinflection collapses inflections to lemmas. Full-width ASCII is
-  folded to half-width and Japanese punctuation/quotes act as word boundaries.
-  Common particles are filtered out.
+  a rank-scored, POS-aware beam tokenizer over a compact flat-array trie of
+  JMdict and Jiten forms precompiled into `assets/dict.bin`. Script runs (kanji
+  + okurigana, hiragana, katakana) fall back to morphological heuristics,
+  stem-gated deinflection collapses inflections to lemmas, and colloquial
+  contractions (`食べてる`, `行かなきゃ`) plus emphatic elongation (`すごーい`)
+  are expanded before lookup. Ruby readings (`<rt>`) are kept as furigana hints
+  so homographs and ruby bases resolve correctly. Full-width ASCII is folded to
+  half-width and Japanese punctuation/quotes act as word boundaries. Common
+  particles are filtered out.
 - Similarity blends sublinear-TF (`1 + ln(count)`), rank-weighted TF-IDF
   cosine over deinflected content words (JMdict POS filtering + Jiten global
   ranks, with low-overlap damping) and sublinear-TF Japanese character bigrams.

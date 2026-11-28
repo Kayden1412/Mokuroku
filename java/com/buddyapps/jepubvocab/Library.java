@@ -519,8 +519,9 @@ public final class Library {
                 if (!order.containsKey(word)) order.put(word, seq[0]++);
             }
         };
+        Tokenizer.RubyHints hints = Tokenizer.RubyHints.of(book.ruby);
         for (PageInfo page : book.pages) {
-            Tokenizer.tokenize(page.text, collector);
+            Tokenizer.tokenize(page.text, hints, collector);
         }
         ArrayList<VocabEntry> out = new ArrayList<VocabEntry>(book.vocab);
         Collections.sort(out, new Comparator<VocabEntry>() {
@@ -896,12 +897,15 @@ public final class Library {
                 }
 
                 StringBuilder all = new StringBuilder();
+                HashMap<String, String> ruby = new HashMap<String, String>();
                 for (String href : hrefs) {
                     if (!isHtml(href)) continue;
                     String path = resolve(opfDir, href);
                     byte[] data = readEntry(zip, path);
                     if (data == null) continue;
-                    String text = htmlToText(new String(data, "UTF-8"));
+                    String html = new String(data, "UTF-8");
+                    collectRuby(html, ruby);
+                    String text = htmlToText(html);
                     if (text.length() < 15) continue;
                     if (all.length() > 0) all.append("\n\n");
                     all.append(text);
@@ -914,10 +918,11 @@ public final class Library {
                 book.author = firstCreator(opf);
                 book.fileName = fileName;
                 book.addedAt = addedAt;
+                book.ruby = ruby;
                 String fullText = all.toString();
                 computeTextStats(fullText, book);
                 book.cover = extractCover(zip, opf, opfDir, manifest);
-                book.pages = splitPages(fullText);
+                book.pages = splitPages(fullText, ruby);
                 for (PageInfo page : book.pages) {
                     for (Map.Entry<String, Integer> e : page.vocab.entrySet()) {
                         Integer old = book.vocabMap.get(e.getKey());
@@ -1103,6 +1108,46 @@ public final class Library {
             // Keep at most one blank line, matching the old \n{3,} -> \n\n rule.
             out.append('\n');
         }
+    }
+
+    /**
+     * Collects {@code <ruby>base<rt>reading</rt></ruby>} pairs before the main
+     * text pass drops the readings. The base is the visible surface text, so
+     * the tokenizer can prefer that exact span and check homograph readings.
+     */
+    private static void collectRuby(String html, Map<String, String> out) {
+        int i = 0;
+        int n = html.length();
+        while (i < n) {
+            int start = indexOfIgnoreCase(html, "<ruby", i);
+            if (start < 0) return;
+            int openEnd = html.indexOf('>', start);
+            if (openEnd < 0) return;
+            int close = indexOfIgnoreCase(html, "</ruby>", openEnd + 1);
+            if (close < 0) return;
+            String inner = html.substring(openEnd + 1, close);
+            int rt = indexOfIgnoreCase(inner, "<rt", 0);
+            if (rt >= 0) {
+                int rtOpen = inner.indexOf('>', rt);
+                int rtClose = rtOpen < 0 ? -1 : indexOfIgnoreCase(inner, "</rt>", rtOpen + 1);
+                if (rtOpen >= 0 && rtClose > rtOpen) {
+                    String base = htmlToText(inner.substring(0, rt)).trim();
+                    String reading = htmlToText(inner.substring(rtOpen + 1, rtClose)).trim();
+                    if (!base.isEmpty() && !reading.isEmpty() && base.length() <= 24) {
+                        out.put(base, reading);
+                    }
+                }
+            }
+            i = close + 7;
+        }
+    }
+
+    private static int indexOfIgnoreCase(String s, String needle, int from) {
+        int max = s.length() - needle.length();
+        for (int i = Math.max(0, from); i <= max; i++) {
+            if (s.regionMatches(true, i, needle, 0, needle.length())) return i;
+        }
+        return -1;
     }
 
     // Single pass: strip tags, decode entities, fold full-width ASCII and
@@ -1357,8 +1402,14 @@ public final class Library {
 
     private static HashMap<String, Integer> tokenize(final String text,
                                                      final Map<String, String> snippets) {
+        return tokenize(text, snippets, null);
+    }
+
+    private static HashMap<String, Integer> tokenize(final String text,
+                                                     final Map<String, String> snippets,
+                                                     Tokenizer.RubyHints hints) {
         final HashMap<String, Integer> counts = new HashMap<String, Integer>();
-        Tokenizer.tokenize(text, new Tokenizer.TokenConsumer() {
+        Tokenizer.tokenize(text, hints, new Tokenizer.TokenConsumer() {
             @Override public void onToken(String word, int startOffset) {
                 Integer old = counts.get(word);
                 counts.put(word, old == null ? 1 : old + 1);
@@ -1443,9 +1494,10 @@ public final class Library {
     /** Retokenizes an already-parsed book from its stored page text. */
     static void retokenizeBook(BookInfo book) {
         if (book == null || book.pages == null) return;
+        Tokenizer.RubyHints hints = Tokenizer.RubyHints.of(book.ruby);
         for (PageInfo page : book.pages) {
             page.snippets.clear();
-            page.vocab = tokenize(page.text, page.snippets);
+            page.vocab = tokenize(page.text, page.snippets, hints);
             if (page.grams == null || page.grams.isEmpty()) {
                 page.grams = makeGrams(page.text);
                 trimGrams(page.grams);
@@ -1496,7 +1548,8 @@ public final class Library {
         book.vocab = toVocabList(book.vocabMap, book.snippets);
     }
 
-    private static ArrayList<PageInfo> splitPages(String text) {
+    private static ArrayList<PageInfo> splitPages(String text, Map<String, String> ruby) {
+        Tokenizer.RubyHints hints = Tokenizer.RubyHints.of(ruby);
         ArrayList<PageInfo> pages = new ArrayList<PageInfo>();
         ArrayList<String> segments = new ArrayList<String>();
         String[] paras = text.split("\\n+");
@@ -1512,7 +1565,7 @@ public final class Library {
         StringBuilder cur = new StringBuilder();
         for (String seg : segments) {
             if (cur.length() > 0 && cur.length() + seg.length() + 1 > PAGE_CHARS) {
-                pages.add(makePage(pages.size() + 1, cur.toString()));
+                pages.add(makePage(pages.size() + 1, cur.toString(), hints));
                 cur.setLength(0);
                 if (pages.size() >= MAX_PAGES) break;
             }
@@ -1520,16 +1573,16 @@ public final class Library {
             cur.append(seg);
         }
         if (cur.length() > 0 && pages.size() < MAX_PAGES) {
-            pages.add(makePage(pages.size() + 1, cur.toString()));
+            pages.add(makePage(pages.size() + 1, cur.toString(), hints));
         }
         return pages;
     }
 
-    private static PageInfo makePage(int number, String text) {
+    private static PageInfo makePage(int number, String text, Tokenizer.RubyHints hints) {
         PageInfo page = new PageInfo();
         page.number = number;
         page.text = text;
-        page.vocab = tokenize(text, page.snippets);
+        page.vocab = tokenize(text, page.snippets, hints);
         page.grams = makeGrams(text);
         page.vocabList = toVocabList(page.vocab, page.snippets);
         if (!page.vocabList.isEmpty()) {
@@ -1565,6 +1618,8 @@ public final class Library {
         public HashMap<String, Integer> vocabMap = new HashMap<String, Integer>();
         public HashMap<String, String> snippets = new HashMap<String, String>();
         public HashMap<String, Integer> grams = new HashMap<String, Integer>();
+        // Ruby base -> reading captured at import (null for books imported before v1.39).
+        public HashMap<String, String> ruby;
 
         public String summary() {
             int pages = pageCount > 0 ? pageCount : this.pages.size();

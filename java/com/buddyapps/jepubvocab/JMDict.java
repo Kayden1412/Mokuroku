@@ -4,6 +4,7 @@ import android.content.Context;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 
@@ -59,6 +60,7 @@ final class JMDict {
 
     private static DictBin dict;
     private static boolean attempted;
+    private static final HashMap<String, String> READINGS = new HashMap<String, String>();
 
     private JMDict() { }
 
@@ -82,6 +84,38 @@ final class JMDict {
         int node = dict.lookup(form);
         if (node < 0) return false;
         return dict.isContentEntry(dict.entryFor(node));
+    }
+
+    /** Coarse POS class of a dictionary form (0 when unknown). */
+    static byte posClassOf(String form) {
+        DictBin d = dict;
+        if (d == null || form == null) return 0;
+        int node = d.lookup(form);
+        return node < 0 ? 0 : d.pos[node];
+    }
+
+    /** Reading of a dictionary form, cached because furigana checks are hot. */
+    static String reading(String form) {
+        if (dict == null || form == null) return "";
+        synchronized (READINGS) {
+            String cached = READINGS.get(form);
+            if (cached != null) return cached;
+        }
+        Entry e = entryFor(form);
+        String reading = e == null ? "" : e.reading;
+        synchronized (READINGS) {
+            if (READINGS.size() >= 16384) READINGS.clear();
+            READINGS.put(form, reading);
+        }
+        return reading;
+    }
+
+    /** True when a ruby reading agrees with a candidate lemma's reading. */
+    static boolean readingMatches(String lemma, String hint) {
+        if (lemma == null || hint == null || hint.isEmpty()) return false;
+        String reading = reading(lemma);
+        if (reading.isEmpty()) return false;
+        return reading.startsWith(hint) || hint.startsWith(reading);
     }
 
     /**

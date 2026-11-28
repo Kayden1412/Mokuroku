@@ -15,7 +15,7 @@ runtime. This eliminates ~4 MB of text parsing and ~30 MB of HashMap allocation
 on every cold start.
 
 Binary layout (big-endian):
-  magic:          "MKD2" (4 bytes)
+  magic:          "MKD3" (4 bytes)
 
   -- Section 1: Trie --
   nodeCount:      int32 (node 0 is unused sentinel)
@@ -25,6 +25,7 @@ Binary layout (big-endian):
   firstChild:     int32[nodeCount]
   nextSibling:    int32[nodeCount]
   flags:          byte[nodeCount]  (bit0=word, bit1=stem)
+  pos:            byte[nodeCount]  (coarse POS class, see POS_* below)
   rank:           int32[nodeCount]
 
   -- Section 2: JMDict entry table --
@@ -60,6 +61,22 @@ IRREGULAR_STEMS = ("来", "き", "こ", "く", "し", "さ", "せ", "す", "よ"
 
 FLAG_WORD = 1
 FLAG_STEM = 2
+
+# Coarse POS classes used by Tokenizer's transition model. Must match the
+# constants in Tokenizer.java.
+POS_UNKNOWN = 0
+POS_NOUN = 1
+POS_VERB = 2
+POS_ADJ = 3
+POS_PARTICLE = 4
+POS_AUX = 5
+POS_ADVERB = 6
+POS_CONJ = 7
+POS_PRONOUN = 8
+POS_AFFIX = 9
+POS_INTERJ = 10
+POS_NUM = 11
+POS_EXPR = 12
 
 
 def pick_input(name: str) -> str:
@@ -111,6 +128,40 @@ def has_content_pos(pos_list: list[str]) -> bool:
     return False
 
 
+def pos_class(pos_list: list[str]) -> int:
+    """One coarse POS class per form, used for transition scoring."""
+    cls = POS_UNKNOWN
+    for p in pos_list:
+        if p.startswith("particle"):
+            return POS_PARTICLE
+        if p.startswith("auxiliary"):
+            return POS_AUX
+        if p.startswith("conjunction"):
+            return POS_CONJ
+        if p.startswith("pronoun"):
+            return POS_PRONOUN
+        if p.startswith("prefix") or p.startswith("suffix"):
+            return POS_AFFIX
+        if p.startswith("interjection"):
+            return POS_INTERJ
+        if p.startswith("numeric") or p.startswith("counter"):
+            return POS_NUM
+        if p.startswith("adverb"):
+            cls = POS_ADVERB
+        elif p.startswith("adjective"):
+            if cls == POS_UNKNOWN:
+                cls = POS_ADJ
+        elif "verb" in p:
+            if cls == POS_UNKNOWN:
+                cls = POS_VERB
+        elif p.startswith("noun") or "noun" in p:
+            if cls == POS_UNKNOWN:
+                cls = POS_NOUN
+        elif p.startswith("expression"):
+            cls = POS_EXPR
+    return cls
+
+
 # ---- Flat-array trie builder (mirrors Tokenizer.java's Trie exactly) ----
 
 class Trie:
@@ -122,6 +173,7 @@ class Trie:
         self.first = [-1] * capacity
         self.nxt = [-1] * capacity
         self.flags = [0] * capacity
+        self.pos = [0] * capacity
         self.rank = [0] * capacity
         self.size = 1  # node 0 is unused sentinel
         # JMdict entry_id per node (-1 = no entry)
@@ -136,18 +188,20 @@ class Trie:
             self.first.extend([-1] * (grow - len(self.first)))
             self.nxt.extend([-1] * (grow - len(self.nxt)))
             self.flags.extend([0] * (grow - len(self.flags)))
+            self.pos.extend([0] * (grow - len(self.pos)))
             self.rank.extend([0] * (grow - len(self.rank)))
             self.entry_id.extend([-1] * (grow - len(self.entry_id)))
         self.ch[nid] = c
         self.first[nid] = -1
         self.nxt[nid] = -1
         self.flags[nid] = 0
+        self.pos[nid] = 0
         self.rank[nid] = 0
         self.entry_id[nid] = -1
         return nid
 
     def insert(self, word, word_rank: int, is_word: bool, is_stem: bool,
-               eid: int = -1) -> int:
+               eid: int = -1, word_pos: int = 0) -> int:
         """Insert a word into the trie. Returns the terminal node id."""
         units = utf16_units(word) if isinstance(word, str) else word
         if not units:
@@ -173,6 +227,8 @@ class Trie:
                 self.rank[node] = word_rank
         if is_stem:
             self.flags[node] |= FLAG_STEM
+        if word_pos and self.pos[node] == 0:
+            self.pos[node] = word_pos
         if eid >= 0 and self.entry_id[node] < 0:
             self.entry_id[node] = eid
         return node
@@ -210,6 +266,7 @@ def main() -> int:
 
             eid = len(entry_conds)
             cond = pos_conditions(pos_list)
+            pcls = pos_class(pos_list)
             entry_conds.append(cond)
             entry_content.append(1 if has_content_pos(pos_list) else 0)
 
@@ -221,12 +278,12 @@ def main() -> int:
                 if form in seen_forms:
                     continue
                 seen_forms.add(form)
-                nid = trie.insert(form, 0, True, False, eid)
+                nid = trie.insert(form, 0, True, False, eid, pcls)
                 form_node_ids.append(nid)
                 form_entry_ids.append(eid)
                 if cond != 0:
                     stem = form[:-1] if len(form) >= 2 else form
-                    trie.insert(stem, 0, False, True)
+                    trie.insert(stem, 0, False, True, -1, pcls)
 
     # --- Load JitenRank ---
     with open(jiten_path, encoding="utf-8") as f:
@@ -240,7 +297,7 @@ def main() -> int:
 
     # --- Irregular stems ---
     for s in IRREGULAR_STEMS:
-        trie.insert(s, 0, False, True)
+        trie.insert(s, 0, False, True, -1, POS_VERB)
 
     # Keep form table sorted by node id so DictBin.entryFor() can binary-search.
     form_pairs = sorted(zip(form_node_ids, form_entry_ids))
@@ -256,7 +313,7 @@ def main() -> int:
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with open(out_path, "wb") as out:
         # Magic
-        out.write(b"MKD2")
+        out.write(b"MKD3")
 
         # -- Section 1: Trie --
         out.write(struct.pack(">II", node_count, 65536))
@@ -270,6 +327,8 @@ def main() -> int:
         out.write(struct.pack(f">{node_count}i", *trie.nxt[:node_count]))
         # flags[nodeCount]
         out.write(bytes(trie.flags[:node_count]))
+        # pos[nodeCount]
+        out.write(bytes(trie.pos[:node_count]))
         # rank[nodeCount]
         out.write(struct.pack(f">{node_count}i", *trie.rank[:node_count]))
 
@@ -315,7 +374,8 @@ def main() -> int:
             f = trie.flags[node]
             r = trie.rank[node]
             eid = trie.entry_id[node]
-            print(f"  VERIFY OK: {w} -> node={node} flags={f} rank={r} entry={eid}")
+            pcls = trie.pos[node]
+            print(f"  VERIFY OK: {w} -> node={node} flags={f} pos={pcls} rank={r} entry={eid}")
 
     print(
         f"\ndict.bin: nodes={node_count} forms={form_count} entries={entry_count} "

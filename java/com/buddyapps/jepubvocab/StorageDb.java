@@ -34,7 +34,7 @@ final class StorageDb extends SQLiteOpenHelper {
     private static final String PROFILES = "profiles";
     private static final String DB_NAME = "mokuroku.db";
     // Bump together with Library.CACHE_VERSION when the stored format changes.
-    private static final int DB_VERSION = 11;
+    private static final int DB_VERSION = 12;
     private static final int CHUNK_BYTES = 256 * 1024;
 
     private final Context appContext;
@@ -72,7 +72,7 @@ final class StorageDb extends SQLiteOpenHelper {
     }
 
     @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
-        if (oldVersion >= 11) return;
+        if (oldVersion >= 12) return;
         if (oldVersion < 9) {
             db.execSQL("DROP TABLE IF EXISTS " + CHUNKS);
             db.execSQL("DROP TABLE IF EXISTS " + BOOKS);
@@ -87,7 +87,9 @@ final class StorageDb extends SQLiteOpenHelper {
             createProfiles(db);
             populateMeta(db);
         }
-        if (oldVersion < 11) {
+        if (oldVersion < 12) {
+            // v1.39 tokenizer: POS transitions, contractions, elongation and
+            // furigana hints. Existing text is retokenized in place.
             retokenizeAll(db);
         }
     }
