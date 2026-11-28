@@ -10,7 +10,9 @@ import android.content.Context;
  */
 final class JitenRank {
 
-    private static final int DEFAULT_RANK = 100000;
+    // Above the highest rank in the full Jiten global list (~412k), so words
+    // the list does not cover sort as rare rather than mid-frequency.
+    private static final int DEFAULT_RANK = 413000;
     private static final int OOV_RANK = 30000;
 
     private JitenRank() { }

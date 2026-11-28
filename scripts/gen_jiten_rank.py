@@ -4,15 +4,16 @@
 Usage: python3 scripts/gen_jiten_rank.py /path/to/frequency_list_global.csv [max_rows]
 
 The source is https://jiten.moe/frequency-dictionaries (Global, CSV), licensed
-CC BY-SA 4.0. Only the first max_rows unique dictionary words are kept so the
-APK stays small; rank is the exact Jiten rank from the CSV.
+CC BY-SA 4.0. All unique dictionary words are kept by default; an optional
+max_rows keeps only that many of the most frequent words for a smaller APK.
+Rank is the exact Jiten rank from the CSV.
 """
 
 import csv
 import os
 import sys
 
-MAX_ROWS = 100000
+MAX_ROWS = 0  # 0 = keep every unique word
 OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                    "data", "jiten_rank.txt")
 
@@ -36,7 +37,7 @@ def main() -> int:
             old = ranks.get(word)
             if old is None or rank < old:
                 ranks[word] = rank
-            if len(ranks) >= limit:
+            if limit > 0 and len(ranks) >= limit:
                 break
 
     ordered = sorted(ranks.items(), key=lambda item: (item[1], item[0]))

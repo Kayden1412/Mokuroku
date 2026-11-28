@@ -27,8 +27,8 @@ regenerated with `scripts/gen_jmnedict_bloom.py`.
 Deinflection rules are derived from
 [hoshidicts](https://github.com/Manhhao/hoshidicts), which follows Yomitan's
 Japanese transforms. Regenerate them with `scripts/gen_deinflector.py` from a
-shallow clone. Matcher word ranks come from [Jiten's global frequency dictionary](https://jiten.moe/frequency-dictionaries)
-(CC BY-SA 4.0).
+shallow clone. Matcher word ranks come from the full [Jiten global frequency dictionary](https://jiten.moe/frequency-dictionaries)
+(CC BY-SA 4.0) — all ~463k unique words, not just the top 100k.
 
 Both dictionaries are compiled into a single prebuilt binary trie at
 `assets/dict.bin`. To regenerate it, run `scripts/build_jmdict.py` (from

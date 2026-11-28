@@ -42,7 +42,8 @@ final class Tokenizer {
     private static final byte POS_EXPR = 12;
     private static final int POS_CLASSES = 13;
 
-    private static final int DEFAULT_RANK = 100000;
+    // Fallback for words without a Jiten rank (full list peaks around 412k).
+    private static final int DEFAULT_RANK = 413000;
     private static final int MAX_WORD_LEN = 16;
     private static final int MAX_KANJI_FALLBACK = 8;
     private static final int MAX_INFLECT_CACHE = 32768;
