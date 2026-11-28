@@ -74,6 +74,11 @@ final class JMDict {
         return dict;
     }
 
+    /** True once the precompiled dictionary is ready to query without loading. */
+    static boolean isLoaded() {
+        return dict != null;
+    }
+
     static boolean contains(String form) {
         if (dict == null || form == null) return false;
         return dict.isWord(dict.lookup(form));

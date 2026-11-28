@@ -263,7 +263,24 @@ public class VocabActivity extends Activity {
         }
 
         final int mode = sortMode;
-        if (mode == SORT_JITEN_FREQ || mode == SORT_JITEN_FREQ_ASC) JitenRank.load(this);
+        if ((mode == SORT_JITEN_FREQ || mode == SORT_JITEN_FREQ_ASC) && !JMDict.isLoaded()) {
+            // The full Jiten trie takes a moment to read; never do that on the UI
+            // thread or a cold sort can trip Android's ANR watchdog.
+            countLabel.setText("Loading Jiten ranks…");
+            final int generation = ++sortGeneration;
+            new Thread(new Runnable() {
+                @Override public void run() {
+                    JitenRank.load(getApplicationContext());
+                    runOnUiThread(new Runnable() {
+                        @Override public void run() {
+                            if (isFinishing() || generation != sortGeneration) return;
+                            applySort();
+                        }
+                    });
+                }
+            }).start();
+            return;
+        }
         ArrayList<Library.VocabEntry> sorted = new ArrayList<Library.VocabEntry>(allEntries);
         Collections.sort(sorted, new Comparator<Library.VocabEntry>() {
             @Override public int compare(Library.VocabEntry a, Library.VocabEntry b) {

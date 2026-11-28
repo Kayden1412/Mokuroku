@@ -236,7 +236,23 @@ final class Ui {
     }
 
     static void wordDialog(final Activity a, final String word, String snippet) {
-        JMDict.load(a);
+        if (!JMDict.isLoaded()) {
+            // A cold dictionary read can take seconds with the full Jiten trie.
+            final String text = snippet;
+            new Thread(new Runnable() {
+                @Override public void run() {
+                    JMDict.load(a.getApplicationContext());
+                    a.runOnUiThread(new Runnable() {
+                        @Override public void run() { wordDialogReady(a, word, text); }
+                    });
+                }
+            }).start();
+            return;
+        }
+        wordDialogReady(a, word, snippet);
+    }
+
+    private static void wordDialogReady(final Activity a, final String word, String snippet) {
         StringBuilder message = new StringBuilder();
         if (snippet != null && !snippet.isEmpty()) message.append(snippet).append("\n\n");
         List<JMDict.Hit> hits = JMDict.lookup(word);
