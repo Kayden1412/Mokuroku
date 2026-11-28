@@ -348,25 +348,34 @@ public final class Library {
         prepare();
     }
 
+    /**
+     * Guards one book's body load. Deliberately separate from the Library class
+     * lock: a background profile rebuild may take a while and must not block the
+     * vocabulary/reader screen from opening its book.
+     */
+    private static final Object LOAD_LOCK = new Object();
+
     /** Loads the full parsed body for one book the first time it is opened. */
-    public static synchronized BookInfo ensureBookLoaded(Context c, int index) {
-        if (index < 0 || index >= books.size()) return null;
-        ensureDb(c);
-        BookInfo meta = books.get(index);
-        if (meta.loaded) return meta;
-        BookInfo full = db.loadBook(meta.fileName);
-        if (full == null) return meta;
-        full.index = index;
-        full.loaded = true;
-        if (full.pageCount <= 0) full.pageCount = meta.pageCount > 0
-                ? meta.pageCount : full.pages.size();
-        if (full.vocabCount <= 0) full.vocabCount = meta.vocabCount > 0
-                ? meta.vocabCount : full.vocab.size();
-        if ((full.cover == null || full.cover.length == 0) && meta.cover != null) {
-            full.cover = meta.cover;
+    public static BookInfo ensureBookLoaded(Context c, int index) {
+        synchronized (LOAD_LOCK) {
+            if (index < 0 || index >= books.size()) return null;
+            ensureDb(c);
+            BookInfo meta = books.get(index);
+            if (meta.loaded) return meta;
+            BookInfo full = db.loadBook(meta.fileName);
+            if (full == null) return meta;
+            full.index = index;
+            full.loaded = true;
+            if (full.pageCount <= 0) full.pageCount = meta.pageCount > 0
+                    ? meta.pageCount : full.pages.size();
+            if (full.vocabCount <= 0) full.vocabCount = meta.vocabCount > 0
+                    ? meta.vocabCount : full.vocab.size();
+            if ((full.cover == null || full.cover.length == 0) && meta.cover != null) {
+                full.cover = meta.cover;
+            }
+            books.set(index, full);
+            return full;
         }
-        books.set(index, full);
-        return full;
     }
 
     public static void deleteBook(Context c, BookInfo book) {
