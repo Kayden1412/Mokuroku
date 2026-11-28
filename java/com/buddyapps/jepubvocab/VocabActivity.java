@@ -2,31 +2,68 @@ package com.buddyapps.jepubvocab;
 
 import android.app.Activity;
 import android.os.Bundle;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
-import android.widget.ImageButton;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ListView;
+import android.widget.Spinner;
 import android.widget.TextView;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 
 public class VocabActivity extends Activity {
 
-    private static final int SORT_BOOK_FREQ = 0;
-    private static final int SORT_JITEN_FREQ = 1;
-    private static final int SORT_CHRONO = 2;
+    // Existing modes keep their saved values; new ascending/reverse modes are
+    // appended so older preferences still mean what they did before.
+    private static final int SORT_BOOK_FREQ = 0;      // most frequent first
+    private static final int SORT_JITEN_FREQ = 1;     // most common in Japanese first
+    private static final int SORT_CHRONO = 2;         // first occurrence in book
+    private static final int SORT_BOOK_FREQ_ASC = 3;  // least frequent first
+    private static final int SORT_JITEN_FREQ_ASC = 4; // rarest first
+    private static final int SORT_CHRONO_LAST = 5;    // last occurrence in book
+    private static final int SORT_WORD_ASC = 6;       // A -> Z
+    private static final int SORT_WORD_DESC = 7;      // Z -> A
+
+    private static final int[] BOOK_MODES = {
+            SORT_BOOK_FREQ, SORT_BOOK_FREQ_ASC,
+            SORT_JITEN_FREQ, SORT_JITEN_FREQ_ASC,
+            SORT_CHRONO, SORT_CHRONO_LAST,
+            SORT_WORD_ASC, SORT_WORD_DESC
+    };
+    private static final String[] BOOK_LABELS = {
+            "Book freq: most", "Book freq: fewest",
+            "Jiten: common", "Jiten: rare",
+            "First in book", "Last in book",
+            "A → Z", "Z → A"
+    };
+    private static final int[] ALL_MODES = {
+            SORT_BOOK_FREQ, SORT_BOOK_FREQ_ASC,
+            SORT_JITEN_FREQ, SORT_JITEN_FREQ_ASC,
+            SORT_WORD_ASC, SORT_WORD_DESC
+    };
+    private static final String[] ALL_LABELS = {
+            "Book freq: most", "Book freq: fewest",
+            "Jiten: common", "Jiten: rare",
+            "A → Z", "Z → A"
+    };
 
     private final ArrayList<Library.VocabEntry> entries =
-            new ArrayList<Library.VocabEntry>();
+            new ArrayList<Library.VocabEntry>(); // filtered rows shown in the list
+    private ArrayList<Library.VocabEntry> allEntries =
+            new ArrayList<Library.VocabEntry>(); // complete, sorted word list
     private ArrayAdapter<Library.VocabEntry> adapter;
     private TextView countLabel;
-    private ImageButton sortButton;
+    private EditText search;
+    private Spinner sortSpinner;
     private boolean oneBook;
     private Library.BookInfo book;
     private int sortMode;
@@ -52,22 +89,46 @@ public class VocabActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(16, 12, 16, 8);
 
+        search = new EditText(this);
+        search.setHint("Search words");
+        search.setTextSize(14);
+        search.setSingleLine(true);
+        search.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void afterTextChanged(Editable s) { applyFilter(); }
+        });
+        root.addView(search);
+
         LinearLayout top = new LinearLayout(this);
         top.setOrientation(LinearLayout.HORIZONTAL);
-        countLabel = Ui.label(this, "", 13, Ui.secondary(this), false);
+        top.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        countLabel = Ui.label(this, "", 12, Ui.secondary(this), false);
         countLabel.setLayoutParams(new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        sortButton = Ui.iconButton(this, R.drawable.ic_sort, "Sort vocabulary",
-                new View.OnClickListener() {
-                    @Override public void onClick(View v) {
-                        sortMode = (sortMode + 1) % 3;
-                        getSharedPreferences("mokuroku", MODE_PRIVATE).edit()
-                                .putInt("vocabSort", sortMode).apply();
-                        applySort();
-                    }
-                });
+        sortSpinner = new Spinner(this);
+        sortSpinner.setPrompt("Sort vocabulary");
+        final int[] modes = oneBook ? BOOK_MODES : ALL_MODES;
+        final String[] labels = oneBook ? BOOK_LABELS : ALL_LABELS;
+        ArrayAdapter<String> sortAdapter = new ArrayAdapter<String>(this,
+                android.R.layout.simple_spinner_item, labels);
+        sortAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        sortSpinner.setAdapter(sortAdapter);
+        sortSpinner.setSelection(positionOf(modes, sortMode), false);
+        sortSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent, View view,
+                                                 int position, long id) {
+                int selected = modes[position];
+                if (selected == sortMode) return;
+                sortMode = selected;
+                getSharedPreferences("mokuroku", MODE_PRIVATE).edit()
+                        .putInt("vocabSort", sortMode).apply();
+                applySort();
+            }
+            @Override public void onNothingSelected(AdapterView<?> parent) { }
+        });
         top.addView(countLabel);
-        top.addView(sortButton);
+        top.addView(sortSpinner);
         root.addView(top);
 
         ListView list = new ListView(this);
@@ -118,12 +179,15 @@ public class VocabActivity extends Activity {
 
         if (oneBook) {
             setTitle("Vocabulary · " + book.title);
-            entries.addAll(book.vocab);
+            setAllEntries(book.vocab);
             applySort();
         } else {
             setTitle("Vocabulary · all books");
-            sortButton.setVisibility(View.GONE);
             countLabel.setText("Building vocabulary…");
+            if (sortMode == SORT_CHRONO || sortMode == SORT_CHRONO_LAST) {
+                sortMode = SORT_BOOK_FREQ;
+                sortSpinner.setSelection(positionOf(ALL_MODES, sortMode), false);
+            }
             new Thread(new Runnable() {
                 @Override public void run() {
                     final List<Library.VocabEntry> all;
@@ -135,7 +199,8 @@ public class VocabActivity extends Activity {
                     runOnUiThread(new Runnable() {
                         @Override public void run() {
                             if (isFinishing()) return;
-                            showEntries(all);
+                            setAllEntries(all);
+                            applySort();
                         }
                     });
                 }
@@ -143,9 +208,38 @@ public class VocabActivity extends Activity {
         }
     }
 
+    private static int positionOf(int[] modes, int mode) {
+        for (int i = 0; i < modes.length; i++) {
+            if (modes[i] == mode) return i;
+        }
+        return 0;
+    }
+
+    /** Keeps the full list; the adapter shows only rows matching the search. */
+    private void setAllEntries(List<Library.VocabEntry> list) {
+        allEntries = new ArrayList<Library.VocabEntry>(list);
+        applyFilter();
+    }
+
+    private void applyFilter() {
+        String query = search.getText().toString().trim().toLowerCase(Locale.ROOT);
+        entries.clear();
+        if (query.isEmpty()) {
+            entries.addAll(allEntries);
+        } else {
+            for (Library.VocabEntry e : allEntries) {
+                if (e.word != null && e.word.toLowerCase(Locale.ROOT).contains(query)) {
+                    entries.add(e);
+                }
+            }
+        }
+        adapter.notifyDataSetChanged();
+        updateCount();
+    }
+
     private void applySort() {
-        if (!oneBook || book == null) return;
-        if (sortMode == SORT_CHRONO) {
+        if (oneBook && (sortMode == SORT_CHRONO || sortMode == SORT_CHRONO_LAST)) {
+            final boolean reverse = sortMode == SORT_CHRONO_LAST;
             if (chronoCache == null) {
                 countLabel.setText("Building chronological order…");
                 final int generation = ++sortGeneration;
@@ -157,49 +251,68 @@ public class VocabActivity extends Activity {
                             @Override public void run() {
                                 if (isFinishing() || generation != sortGeneration) return;
                                 chronoCache = result;
-                                showEntries(result);
+                                setAllEntries(reverse ? reversed(result) : result);
                             }
                         });
                     }
                 }).start();
             } else {
-                showEntries(chronoCache);
+                setAllEntries(reverse ? reversed(chronoCache) : chronoCache);
             }
             return;
         }
+
         final int mode = sortMode;
-        if (mode == SORT_JITEN_FREQ) JitenRank.load(this);
-        Collections.sort(entries, new Comparator<Library.VocabEntry>() {
+        if (mode == SORT_JITEN_FREQ || mode == SORT_JITEN_FREQ_ASC) JitenRank.load(this);
+        ArrayList<Library.VocabEntry> sorted = new ArrayList<Library.VocabEntry>(allEntries);
+        Collections.sort(sorted, new Comparator<Library.VocabEntry>() {
             @Override public int compare(Library.VocabEntry a, Library.VocabEntry b) {
-                if (mode == SORT_JITEN_FREQ) {
-                    int j = Integer.compare(JitenRank.rank(a.word), JitenRank.rank(b.word));
-                    if (j != 0) return j;
+                String wa = a.word == null ? "" : a.word;
+                String wb = b.word == null ? "" : b.word;
+                if (mode == SORT_BOOK_FREQ || mode == SORT_BOOK_FREQ_ASC) {
+                    int c = mode == SORT_BOOK_FREQ
+                            ? Integer.compare(b.count, a.count)
+                            : Integer.compare(a.count, b.count);
+                    if (c != 0) return c;
+                    return wa.compareTo(wb);
                 }
-                int c = Integer.compare(b.count, a.count);
-                return c != 0 ? c : a.word.compareTo(b.word);
+                if (mode == SORT_JITEN_FREQ || mode == SORT_JITEN_FREQ_ASC) {
+                    int ra = JitenRank.rank(wa);
+                    int rb = JitenRank.rank(wb);
+                    int c = mode == SORT_JITEN_FREQ
+                            ? Integer.compare(ra, rb) : Integer.compare(rb, ra);
+                    if (c != 0) return c;
+                    return wa.compareTo(wb);
+                }
+                return mode == SORT_WORD_ASC ? wa.compareTo(wb) : wb.compareTo(wa);
             }
         });
-        showEntries(entries);
+        setAllEntries(sorted);
     }
 
-    private void showEntries(List<Library.VocabEntry> list) {
-        if (list != entries) {
-            entries.clear();
-            entries.addAll(list);
-        }
-        adapter.notifyDataSetChanged();
-        updateCount();
+    private static List<Library.VocabEntry> reversed(List<Library.VocabEntry> list) {
+        ArrayList<Library.VocabEntry> out = new ArrayList<Library.VocabEntry>(list);
+        Collections.reverse(out);
+        return out;
     }
 
     private void updateCount() {
         String label;
-        if (!oneBook) label = "frequency";
-        else if (sortMode == SORT_JITEN_FREQ) label = "Jiten frequency";
-        else if (sortMode == SORT_CHRONO) label = "chronological order";
-        else label = "book frequency";
-        countLabel.setText(Ui.num(entries.size()) + " words  ·  sorted by " + label
+        if (sortMode == SORT_JITEN_FREQ || sortMode == SORT_JITEN_FREQ_ASC) {
+            label = sortMode == SORT_JITEN_FREQ ? "Jiten frequency" : "Jiten rarity";
+        } else if (sortMode == SORT_CHRONO || sortMode == SORT_CHRONO_LAST) {
+            label = sortMode == SORT_CHRONO ? "first occurrence" : "last occurrence";
+        } else if (sortMode == SORT_WORD_ASC || sortMode == SORT_WORD_DESC) {
+            label = sortMode == SORT_WORD_ASC ? "word A → Z" : "word Z → A";
+        } else if (!oneBook) {
+            label = "frequency";
+        } else {
+            label = sortMode == SORT_BOOK_FREQ ? "book frequency" : "book rarity";
+        }
+        String shown = search.getText().toString().trim().isEmpty()
+                ? Ui.num(entries.size())
+                : Ui.num(entries.size()) + " of " + Ui.num(allEntries.size());
+        countLabel.setText(shown + " words  ·  " + label
                 + ". Tap to copy or look up a meaning.");
-        sortButton.setContentDescription("Sort vocabulary: " + label);
-        sortButton.setTooltipText("Sort: " + label + " (tap to change)");
     }
 }

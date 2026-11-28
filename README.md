@@ -5,10 +5,11 @@ An Android app for Japanese EPUBs. Pick many `.epub` files, and it parses them i
 - a library with card, list or grid display, covers, search, and sorting by name,
   time added, characters, words, dialogue %, or average sentence length,
 - a page-by-page reader,
-- a vocabulary list extracted from the Japanese text, sortable by book
-  frequency, Jiten frequency, or first appearance, with offline definitions
-  from an embedded subset of JMdict and Yomitan-style deinflection so inflected
-  forms resolve to their dictionary entry,
+- a vocabulary list extracted from the Japanese text, with word search and a
+  sort dropdown for book frequency, Jiten frequency, first/last appearance or
+  word order, each in both directions, with offline definitions from an embedded
+  subset of JMdict and Yomitan-style deinflection so inflected forms resolve to
+  their dictionary entry,
 - a "books with similar content" list on each book **and** on each page,
   based on rank-weighted shared vocabulary and character patterns, with a
   minimum-match filter on each book page.
